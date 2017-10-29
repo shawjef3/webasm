@@ -24,9 +24,9 @@ object ValueType {
     Set(I32, I64, F32, F64)
 
   val idToValue: Map[Byte, ValueType] = {
-                                          for (value <- values) yield
-                                            value.Id -> value
-                                        }.toMap
+    for (value <- values) yield
+      value.Id -> value
+  }.toMap
 
   val codec: Codec[ValueType] =
     Codec(

@@ -1,6 +1,6 @@
 package me.jeffshaw.webasm.ast
 
-import scodec.{Codec, codecs}
+import scodec.Codec
 
 case class FuncType(
   argumentTypes: StackType,
@@ -9,7 +9,7 @@ case class FuncType(
 
 object FuncType {
   implicit val codec: Codec[FuncType] =
-    codecs.constant(wcodecs.u8.encode(0x40).require) ~
+    wcodecs.u8Const(0x40) ~
       wcodecs.vec(ValueType.codec) ~
       wcodecs.vec(ValueType.codec) xmap(
       {

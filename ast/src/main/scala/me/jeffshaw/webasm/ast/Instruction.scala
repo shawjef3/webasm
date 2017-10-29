@@ -236,7 +236,7 @@ object CallIndirect extends Instruction.Companion {
   override type I = CallIndirect
   override val Header: Byte = 0x11
   override val codec: Codec[I] =
-    headerCodec ~ wcodecs.vu32 ~ codecs.constant(BitVector(Array(0x00.toByte))) xmap(
+    headerCodec ~ wcodecs.vu32 ~ wcodecs.u8Const(0x00) xmap(
       x => apply(x._1._2),
       i => unapply(i) match {
         case Some(v) => (((), v), ())

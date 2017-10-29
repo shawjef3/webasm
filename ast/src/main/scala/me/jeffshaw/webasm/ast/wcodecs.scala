@@ -10,6 +10,9 @@ object wcodecs {
   val u8 =
     byte
 
+  def u8Const(b: Byte): Codec[Unit] =
+    constant(u8.encode(b).require)
+
   val u16 =
     uintL(16)
 
