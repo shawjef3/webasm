@@ -66,7 +66,9 @@ object Module {
     def apply(value: Inner): S
     def unapply(section: S): Option[Inner]
 
-    val sectionHeader: BitVector
+    val Id: Byte
+
+    lazy val sectionHeader: BitVector = wcodecs.u8.encode(Id).require
     lazy val sectionHeaderCodec = codecs.constant(sectionHeader)
     val default: S
     def needed(value: Inner): Boolean
@@ -112,7 +114,7 @@ object Module {
   ) extends Section
 
   object FuncTypes extends SectionCompanion[FuncTypes, Vector[FuncType]] {
-    override val sectionHeader: BitVector = wcodecs.u8.encode(3.toByte).require
+    override val Id: Byte = 3
     override val default: FuncTypes = FuncTypes(Vector.empty)
 
     override def needed(value: Vector[FuncType]): Boolean = value.nonEmpty
@@ -126,7 +128,7 @@ object Module {
   ) extends Section
 
   object Globals extends SectionCompanion[Globals, Vector[Global]] {
-    override val sectionHeader: BitVector = wcodecs.u8.encode(6.toByte).require
+    override val Id: Byte = 6
     override val default: Globals = Globals(Vector.empty)
 
     override def needed(value: Vector[Global]): Boolean = ???
@@ -139,7 +141,7 @@ object Module {
   ) extends Section
 
   object Tables extends SectionCompanion[Tables, Vector[Table]] {
-    override val sectionHeader: BitVector = wcodecs.u8.encode(4).require
+    override val Id: Byte = 4
     override val default: Tables = Tables(Vector.empty)
 
     override def needed(value: Vector[Table]): Boolean = value.nonEmpty
@@ -153,7 +155,7 @@ object Module {
   ) extends Section
 
   object Memories extends SectionCompanion[Memories, Vector[Memory]] {
-    override val sectionHeader: BitVector = wcodecs.u8.encode(5).require
+    override val Id: Byte = 5
     override val default: Memories = Memories(Vector.empty)
 
     override def needed(value: Vector[Memory]): Boolean = value.nonEmpty
@@ -170,7 +172,7 @@ object Module {
     def ofFuncs(f: Vector[Func]): Funcs =
       Funcs(f.map(_.funcType))
 
-    override val sectionHeader: BitVector = wcodecs.u8.encode(3).require
+    override val Id: Byte = 3
     override val default: Funcs = Funcs(Vector.empty)
 
     override def needed(value: Vector[Var]): Boolean = value.nonEmpty
@@ -184,7 +186,7 @@ object Module {
   ) extends Section
 
   object Start extends SectionCompanion[Start, Option[Var]] {
-    override val sectionHeader: BitVector = wcodecs.u8.encode(8).require
+    override val Id: Byte = 8
     override val default: Start = Start(None)
 
     override def needed(value: Option[Var]): Boolean = value.nonEmpty
@@ -200,7 +202,7 @@ object Module {
   ) extends Section
 
   object Elems extends SectionCompanion[Elems, Vector[Elem]] {
-    override val sectionHeader: BitVector = wcodecs.u8.encode(9).require
+    override val Id: Byte = 9
     override val default: Elems = Elems(Vector.empty)
 
     override def needed(value: Vector[Elem]): Boolean = value.nonEmpty
@@ -216,7 +218,7 @@ object Module {
   ) extends Section
 
   object Datas extends SectionCompanion[Datas, Vector[Data]] {
-    override val sectionHeader: BitVector = wcodecs.u8.encode(11).require
+    override val Id: Byte = 11
     override val default: Datas = Datas(Vector.empty)
 
     override def needed(value: Vector[Data]): Boolean = value.nonEmpty
@@ -230,7 +232,7 @@ object Module {
   ) extends Section
 
   object Imports extends SectionCompanion[Imports, Vector[Import]] {
-    override val sectionHeader: BitVector = wcodecs.u8.encode(2).require
+    override val Id: Byte = 2
     override val default: Imports = Imports(Vector.empty)
 
     override def needed(value: Vector[Import]): Boolean = value.nonEmpty
@@ -244,7 +246,7 @@ object Module {
   ) extends Section
 
   object Exports extends SectionCompanion[Exports, Vector[Export]] {
-    override val sectionHeader: BitVector = wcodecs.u8.encode(7).require
+    override val Id: Byte = 7
     override val default: Exports = Exports(Vector.empty)
 
     override def needed(value: Vector[Export]): Boolean = value.nonEmpty
@@ -316,7 +318,7 @@ object Module {
   ) extends Section
 
   object Codes extends SectionCompanion[Codes, Vector[Code]] {
-    override val sectionHeader: BitVector = wcodecs.u8.encode(10).require
+    override val Id: Byte = 10
     override val default: Codes = Codes(Vector.empty)
 
     override def needed(value: Vector[Code]): Boolean = value.nonEmpty
@@ -328,7 +330,7 @@ object Module {
   case class UserSection(b: BitVector) extends Section
 
   object UserSection extends SectionCompanion[UserSection, BitVector] {
-    override val sectionHeader: BitVector = wcodecs.u8.encode(0).require
+    override val Id: Byte = 0
     override val default: UserSection = UserSection(BitVector.empty)
 
     override def needed(value: BitVector): Boolean = value.nonEmpty
@@ -345,6 +347,9 @@ object Module {
   val versionBytes = wcodecs.u32.encode(version).require
 
   val magicHeader = wcodecs.u32.encode(UInt(0x6d736100)).require
+
+  val magicHeaderCodec =
+    codecs.constant(magicHeader)
 
   implicit val codec: Codec[Module] =
     Codec(
@@ -380,12 +385,12 @@ object Module {
         },
       decoder =
         for {
-          _ <- codecs.constant(magicHeader)
+          _ <- magicHeaderCodec
           decodedVersion <- wcodecs.u32
           _ <-
-          if (decodedVersion == version)
-            codecs.ignore(0)
-          else codecs.fail(Err.apply(s"Expected version $version but got $decodedVersion."))
+            if (decodedVersion == version)
+              codecs.ignore(0)
+            else codecs.fail(Err.apply(s"Expected version $version but got $decodedVersion."))
           _ <- UserSection.ignore
           types <- Codec[FuncTypes]
           _ <- UserSection.ignore
