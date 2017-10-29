@@ -204,8 +204,52 @@ object ULong {
   private val unsignedRemainder =
     Long.MaxValue.toFloat
 
-  implicit def ulong2float(x: ULong): Float = x.toFloat
-  implicit def ulong2double(x: ULong): Double = x.toDouble
+  implicit def ulong2float(x: ULong): Float =
+    x.toFloat
+
+  implicit def ulong2double(x: ULong): Double =
+    x.toDouble
+
+  implicit object ULongNumeric extends Numeric[ULong] with Ordering[ULong] {
+    override def plus(
+      x: ULong,
+      y: ULong
+    ): ULong =
+      x + y
+
+    override def minus(
+      x: ULong,
+      y: ULong
+    ): ULong =
+      x - y
+
+    override def times(
+      x: ULong,
+      y: ULong
+    ): ULong =
+      x * y
+
+    override def negate(x: ULong): ULong =
+      ULong(-x.i)
+
+    override def fromInt(x: Int): ULong =
+      ULong(x.toLong)
+
+    override def toInt(x: ULong): Int =
+      x.toInt
+
+    override def toLong(x: ULong): Long =
+      x.toLong
+
+    override def toFloat(x: ULong): Float =
+      x.toFloat
+
+    override def toDouble(x: ULong): Double =
+      x.toDouble
+
+    override def compare(x: ULong, y: ULong): Int =
+      java.lang.Long.compareUnsigned(x.i, y.i)
+  }
 
   //avoids boxing
   class Buffer(vals: ArrayBuffer[Long]) extends scala.collection.mutable.Buffer[ULong]() {

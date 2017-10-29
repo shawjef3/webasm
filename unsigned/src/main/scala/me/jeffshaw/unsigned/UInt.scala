@@ -192,9 +192,52 @@ object UInt {
   def valueOf(x: String, radix: Int = 10): UInt =
     UInt(java.lang.Integer.parseUnsignedInt(x, radix))
 
-  implicit def uint2float(x: UInt): Float = x.toFloat
+  implicit def uint2float(x: UInt): Float =
+    x.toFloat
 
-  implicit def uint2double(x: UInt): Double = x.toDouble
+  implicit def uint2double(x: UInt): Double =
+    x.toDouble
+
+  implicit object UIntNumeric extends Numeric[UInt] with Ordering[UInt] {
+    override def plus(
+      x: UInt,
+      y: UInt
+    ): UInt =
+      x + y
+
+    override def minus(
+      x: UInt,
+      y: UInt
+    ): UInt =
+      x - y
+
+    override def times(
+      x: UInt,
+      y: UInt
+    ): UInt =
+      x * y
+
+    override def negate(x: UInt): UInt =
+      UInt(-x.i)
+
+    override def fromInt(x: Int): UInt =
+      UInt(x)
+
+    override def toInt(x: UInt): Int =
+      x.toInt
+
+    override def toLong(x: UInt): Long =
+      x.toLong
+
+    override def toFloat(x: UInt): Float =
+      x.toFloat
+
+    override def toDouble(x: UInt): Double =
+      x.toDouble
+
+    override def compare(x: UInt, y: UInt): Int =
+      java.lang.Integer.compareUnsigned(x.i, y.i)
+  }
 
   //avoids boxing
   class Buffer(vals: ArrayBuffer[Int]) extends scala.collection.mutable.Buffer[UInt]() {
@@ -206,7 +249,8 @@ object UInt {
       this
     }
 
-    override def clear(): Unit = vals.clear()
+    override def clear(): Unit =
+      vals.clear()
 
     override def +=:(elem: UInt): this.type = {
       elem.i +=: vals
@@ -219,9 +263,11 @@ object UInt {
       UInt(vals.remove(n))
     }
 
-    override def apply(idx: Int): UInt = UInt(vals(idx))
+    override def apply(idx: Int): UInt =
+      UInt(vals(idx))
 
-    override def length: Int = vals.length
+    override def length: Int =
+      vals.length
 
     override def iterator: Iterator[UInt] = {
       val underlying = vals.iterator
