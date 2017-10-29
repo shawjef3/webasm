@@ -1,6 +1,5 @@
 package me.jeffshaw.webasm.ast
 
-import me.jeffshaw.webasm.ast.nodes.wcodecs
 import scodec.Codec
 
 case class Segment[A](

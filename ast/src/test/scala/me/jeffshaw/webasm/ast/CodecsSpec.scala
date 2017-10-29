@@ -1,7 +1,6 @@
 package me.jeffshaw.webasm.ast
 
 import me.jeffshaw.unsigned.ULong
-import me.jeffshaw.webasm.ast.nodes.wcodecs
 import org.scalatest.FunSuite
 import scodec.Attempt
 import scodec.bits.BitVector

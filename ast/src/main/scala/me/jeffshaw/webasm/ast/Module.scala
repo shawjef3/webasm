@@ -1,7 +1,6 @@
 package me.jeffshaw.webasm.ast
 
 import me.jeffshaw.unsigned.UInt
-import me.jeffshaw.webasm.ast.nodes.wcodecs
 import scala.reflect.{ClassTag, classTag}
 import scodec.bits.{BitVector, ByteVector}
 import scodec._

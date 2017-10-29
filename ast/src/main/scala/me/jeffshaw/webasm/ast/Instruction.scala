@@ -1,7 +1,6 @@
 package me.jeffshaw.webasm.ast
 
 import me.jeffshaw.unsigned.UInt
-import me.jeffshaw.webasm.ast.nodes.wcodecs
 import scodec._
 import scodec.codecs
 import scodec.bits.{BitVector, ByteVector}

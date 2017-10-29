@@ -1,6 +1,5 @@
 package me.jeffshaw.webasm.ast
 
-import me.jeffshaw.webasm.ast.nodes.wcodecs
 import scodec.{Attempt, Codec, Decoder, Encoder, Err, codecs}
 
 sealed trait Mutability {
