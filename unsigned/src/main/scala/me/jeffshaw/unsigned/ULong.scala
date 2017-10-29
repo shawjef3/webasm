@@ -2,7 +2,7 @@ package me.jeffshaw.unsigned
 
 import scala.collection.mutable.ArrayBuffer
 
-case class ULong(i: Long) {
+case class ULong(private[unsigned] val i: Long) {
   private def unsignedPart =
     i & ULong.unsignedMask
 
@@ -195,10 +195,7 @@ object ULong {
   final val MaxValue =
     ULong(-1L)
 
-  def valueOf(x: String): ULong =
-    ULong(java.lang.Long.parseUnsignedLong(x))
-
-  def valueOf(x: String, radix: Int): ULong =
+  def valueOf(x: String, radix: Int = 10): ULong =
     ULong(java.lang.Long.parseUnsignedLong(x, radix))
 
   private val unsignedMask =
@@ -211,7 +208,7 @@ object ULong {
   implicit def ulong2double(x: ULong): Double = x.toDouble
 
   //avoids boxing
-  class Buffer(vals: scala.collection.mutable.Buffer[Long] = ArrayBuffer[Long]()) extends scala.collection.mutable.Buffer[ULong]() {
+  class Buffer(vals: ArrayBuffer[Long]) extends scala.collection.mutable.Buffer[ULong]() {
 
     override def update(n: Int, newelem: ULong): Unit = vals.update(n, newelem.i)
 
@@ -250,7 +247,9 @@ object ULong {
 
   object Buffer {
     def apply(vals: ULong*): Buffer =
-      new Buffer(vals.map(_.i).toBuffer)
+      new Buffer(ArrayBuffer(vals.map(_.i): _*))
+
+    def empty: Buffer = new Buffer(ArrayBuffer.empty)
   }
 
 }

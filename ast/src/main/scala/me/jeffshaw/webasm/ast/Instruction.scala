@@ -4,20 +4,79 @@ import me.jeffshaw.unsigned.UInt
 import me.jeffshaw.webasm.ast.nodes.wcodecs
 import scodec._
 import scodec.codecs
-import scodec.bits.BitVector
+import scodec.bits.{BitVector, ByteVector}
 import shapeless.syntax.std.product._
 
 sealed trait Instruction
 
 object Instruction {
-  implicit val codec: Codec[Instruction] =
-    codecs.choice()
+  implicit val codec: Codec[Instruction] = {
+    val all =
+      (I32Ops.all ++
+        I64Ops.all ++
+        F32Ops.all ++
+        F64Ops.all
+        ).toSeq.map(_.codec) ++
+        Seq(
+          Unreachable.codec,
+          Nop.codec,
+          Block.codec,
+          Loop.codec,
+          If.codec,
+          Else.codec,
+          Br.codec,
+          BrIf.codec,
+          BrTable.codec,
+          Return.codec,
+          Call.codec,
+          CallIndirect.codec,
+          Drop.codec,
+          End.codec,
+          Select.codec,
+          GetLocal.codec,
+          SetLocal.codec,
+          TeeLocal.codec,
+          GetGlobal.codec,
+          SetGlobal.codec,
+          MemoryOperation.Load.F32None.codec,
+          MemoryOperation.Load.F64None.codec,
+          MemoryOperation.Load.I32Mem8SZ.codec,
+          MemoryOperation.Load.I32Mem16SZ.codec,
+          MemoryOperation.Load.I32None.codec,
+          MemoryOperation.Load.I32Mem8ZX.codec,
+          MemoryOperation.Load.I32Mem16ZX.codec,
+          MemoryOperation.Load.I64Mem8SX.codec,
+          MemoryOperation.Load.I64Mem8ZX.codec,
+          MemoryOperation.Load.I64Mem16SX.codec,
+          MemoryOperation.Load.I64Mem16ZX.codec,
+          MemoryOperation.Load.I64Mem32SX.codec,
+          MemoryOperation.Load.I64Mem32ZX.codec,
+          MemoryOperation.Load.I64None.codec,
+          MemoryOperation.Store.F32None.codec,
+          MemoryOperation.Store.F64None.codec,
+          MemoryOperation.Store.I32Mem8.codec,
+          MemoryOperation.Store.I32Mem16.codec,
+          MemoryOperation.Store.I32None.codec,
+          MemoryOperation.Store.I64Mem8.codec,
+          MemoryOperation.Store.I64Mem16.codec,
+          MemoryOperation.Store.I64Mem32.codec,
+          MemoryOperation.Store.I64None.codec,
+          CurrentMemory.codec,
+          GrowMemory.codec,
+          Const.I32.codec,
+          Const.I64.codec,
+          Const.F32.codec,
+          Const.F64.codec,
+        )
+
+    codecs.choice(all.asInstanceOf[Seq[Codec[Instruction]]]: _*)
+  }
 
   trait Companion {
     type I
 
     val Header: Byte
-    lazy val headerCodec = codecs.constant(BitVector(Header))
+    lazy val headerCodec: Codec[Unit] = codecs.constant(BitVector(Header))
 
     val codec: Codec[I]
   }
@@ -26,6 +85,20 @@ object Instruction {
     override type I = this.type
     override val codec: Codec[this.type] =
       headerCodec.xmap(Function.const(this), Function.const(()))
+  }
+
+  trait OnlyVar extends Companion {
+    def apply(value: Var): I
+    def unapply(i: I): Option[Var]
+
+    override val codec: Codec[I] =
+      headerCodec ~ wcodecs.vu32 xmap(
+        x => apply(x._2),
+        i => unapply(i) match {
+          case Some(v) => ((), v)
+          case None => ???
+        }
+      )
   }
 }
 
@@ -117,37 +190,108 @@ object Else extends Instruction.Companion {
 
 case class Br(label: Var) extends Instruction
 
+object Br extends Instruction.OnlyVar {
+  override type I = Br
+  override val Header: Byte = 0x0c
+}
+
 case class BrIf(label: Var) extends Instruction
+
+object BrIf extends Instruction.OnlyVar {
+  override type I = BrIf
+  override val Header: Byte = 0x0d
+}
 
 case class BrTable(
   table: Vector[Var],
   condition: Var
 ) extends Instruction
 
-case object Return extends Instruction
+object BrTable extends Instruction.Companion {
+  override type I = BrTable
+  override val Header: Byte = 0x0e
+  override val codec: Codec[BrTable] =
+    headerCodec ~ wcodecs.vec(wcodecs.vu32) ~ wcodecs.vu32 xmap(
+      x => BrTable(x._1._2, x._2),
+      i => unapply(i) match {
+        case Some((table, condition)) => (((), table), condition)
+        case None => ???
+      }
+    )
+}
 
-case class Call(label: Var) extends Instruction
-
-case class CallIndirect(label: Var) extends Instruction
-
-case object Drop extends Instruction
-
-case object End extends Instruction.Singleton {
-  override type I = this.type
+case object Return extends Instruction.Singleton {
   override val Header: Byte = 0x0f
 }
 
-case object Select extends Instruction
+case class Call(label: Var) extends Instruction
+
+object Call extends Instruction.OnlyVar {
+  override type I = Call
+  override val Header: Byte = 0x10
+}
+
+case class CallIndirect(label: Var) extends Instruction
+
+object CallIndirect extends Instruction.Companion {
+  override type I = CallIndirect
+  override val Header: Byte = 0x11
+  override val codec: Codec[I] =
+    headerCodec ~ wcodecs.vu32 ~ codecs.constant(BitVector(Array(0x00.toByte))) xmap(
+      x => apply(x._1._2),
+      i => unapply(i) match {
+        case Some(v) => (((), v), ())
+        case None => ???
+      }
+    )
+}
+
+case object Drop extends Instruction.Singleton {
+  override val Header: Byte = 0x1a
+}
+
+case object End extends Instruction.Singleton {
+  override val Header: Byte = 0x0b
+}
+
+case object Select extends Instruction.Singleton {
+  override val Header: Byte = 0x1b
+}
 
 case class GetLocal(label: Var) extends Instruction
 
+object GetLocal extends Instruction.OnlyVar {
+  override type I = GetLocal
+  override val Header: Byte = 0x20
+}
+
 case class SetLocal(label: Var) extends Instruction
+
+object SetLocal extends Instruction.OnlyVar {
+  override type I = SetLocal
+  override val Header: Byte = 0x21
+}
 
 case class TeeLocal(label: Var) extends Instruction
 
+object TeeLocal extends Instruction.OnlyVar {
+  override type I = TeeLocal
+  override val Header: Byte = 0x21
+}
+
 case class GetGlobal(label: Var) extends Instruction
 
+object GetGlobal extends Instruction.OnlyVar {
+  override type I = GetGlobal
+  override val Header: Byte = 0x23
+}
+
 case class SetGlobal(label: Var) extends Instruction
+
+object SetGlobal extends Instruction.OnlyVar {
+  override type I = SetGlobal
+  override val Header: Byte = 0x24
+}
 
 sealed trait MemSize
 
@@ -166,17 +310,16 @@ trait MemoryOperation[Self <: MemoryOperation[Self, Size], Size] extends Instruc
 
 object MemoryOperation  {
 
-  trait M[Size] extends Instruction {
+  trait M[Size] extends Instruction.Singleton {
     self =>
-//    protected val HeadBytes: Vector[Byte]
-    protected val memoryType: ValueType
-    protected val size: Option[Size]
+    val memoryType: ValueType
+    val size: Option[Size]
   }
 
   type Load = M[Load.Size]
 
   object Load {
-    case class Size(size: nodes.MemSize, extension: Extension)
+    case class Size(size: MemSize, extension: Extension)
 
     sealed trait Extension
 
@@ -186,156 +329,162 @@ object MemoryOperation  {
     }
 
     object I32None extends Load {
-      //override protected val HeadBytes: Vector[Byte] = Bytes(0x28)
-      override protected val memoryType: ValueType = ValueType.I32
-      override protected val size: Option[Size] = None
+      override val Header: Byte = 0x28
+      override val memoryType: ValueType = ValueType.I32
+      override val size: Option[Size] = None
     }
 
     object I64None extends Load {
-      //override protected val HeadBytes: Vector[Byte] = Bytes(0x29)
-      override protected val memoryType: ValueType = ValueType.I64
-      override protected val size: Option[Size] = None
+      override val Header: Byte = 0x29
+      override val memoryType: ValueType = ValueType.I64
+      override val size: Option[Size] = None
     }
 
     object F32None extends Load {
-      //override protected val HeadBytes: Vector[Byte] = Bytes(0x2a)
-      override protected val memoryType: ValueType = ValueType.F32
-      override protected val size: Option[Size] = None
+      override val Header: Byte = 0x2a
+      override val memoryType: ValueType = ValueType.F32
+      override val size: Option[Size] = None
     }
 
     object F64None extends Load {
-      //override protected val HeadBytes: Vector[Byte] = Bytes(0x2b)
-      override protected val memoryType: ValueType = ValueType.F64
-      override protected val size: Option[Size] = None
+      override val Header: Byte = 0x2b
+      override val memoryType: ValueType = ValueType.F64
+      override val size: Option[Size] = None
     }
 
     object I32Mem8SZ extends Load {
-      //override protected val HeadBytes: Vector[Byte] = Bytes(0x2c)
-      override protected val memoryType: ValueType = ValueType.I32
-      override protected val size: Option[Size] = Some(Size(nodes.MemSize.`8`, Extension.SX))
+      override val Header: Byte = 0x2c
+      override val memoryType: ValueType = ValueType.I32
+      override val size: Option[Size] = Some(Size(MemSize.`8`, Extension.SX))
     }
 
     object I32Mem8ZX extends Load {
-      //override protected val HeadBytes: Vector[Byte] = Bytes(0x2d)
-      override protected val memoryType: ValueType = ValueType.I32
-      override protected val size: Option[Size] = Some(Size(nodes.MemSize.`8`, Extension.ZX))
+      override val Header: Byte = 0x2d
+      override val memoryType: ValueType = ValueType.I32
+      override val size: Option[Size] = Some(Size(MemSize.`8`, Extension.ZX))
     }
 
     object I32Mem16SZ extends Load {
-      //override protected val HeadBytes: Vector[Byte] = Bytes(0x2e)
-      override protected val memoryType: ValueType = ValueType.I32
-      override protected val size: Option[Size] = Some(Size(nodes.MemSize.`16`, Extension.SX))
+      override val Header: Byte = 0x2e
+      override val memoryType: ValueType = ValueType.I32
+      override val size: Option[Size] = Some(Size(MemSize.`16`, Extension.SX))
     }
 
     object I32Mem16ZX extends Load {
-      //override protected val HeadBytes: Vector[Byte] = Bytes(0x2f)
-      override protected val memoryType: ValueType = ValueType.I32
-      override protected val size: Option[Size] = Some(Size(nodes.MemSize.`16`, Extension.ZX))
+      override val Header: Byte = 0x2f
+      override val memoryType: ValueType = ValueType.I32
+      override val size: Option[Size] = Some(Size(MemSize.`16`, Extension.ZX))
     }
 
     object I64Mem8SX extends Load {
-      //override protected val HeadBytes: Vector[Byte] = Bytes(0x30)
-      override protected val memoryType: ValueType = ValueType.I64
-      override protected val size: Option[Size] = Some(Size(nodes.MemSize.`8`, Extension.SX))
+      override val Header: Byte = 0x30
+      override val memoryType: ValueType = ValueType.I64
+      override val size: Option[Size] = Some(Size(MemSize.`8`, Extension.SX))
     }
 
     object I64Mem8ZX extends Load {
-      //override protected val HeadBytes: Vector[Byte] = Bytes(0x31)
-      override protected val memoryType: ValueType = ValueType.I64
-      override protected val size: Option[Size] = Some(Size(nodes.MemSize.`8`, Extension.ZX))
+      override val Header: Byte = 0x31
+      override val memoryType: ValueType = ValueType.I64
+      override val size: Option[Size] = Some(Size(MemSize.`8`, Extension.ZX))
     }
 
     object I64Mem16SX extends Load {
-      //override protected val HeadBytes: Vector[Byte] = Bytes(0x32)
-      override protected val memoryType: ValueType = ValueType.I64
-      override protected val size: Option[Size] = Some(Size(nodes.MemSize.`16`, Extension.SX))
+      override val Header: Byte = 0x32
+      override val memoryType: ValueType = ValueType.I64
+      override val size: Option[Size] = Some(Size(MemSize.`16`, Extension.SX))
     }
 
     object I64Mem16ZX extends Load {
-      //override protected val HeadBytes: Vector[Byte] = Bytes(0x33)
-      override protected val memoryType: ValueType = ValueType.I64
-      override protected val size: Option[Size] = Some(Size(nodes.MemSize.`16`, Extension.ZX))
+      override val Header: Byte = 0x33
+      override val memoryType: ValueType = ValueType.I64
+      override val size: Option[Size] = Some(Size(MemSize.`16`, Extension.ZX))
     }
 
     object I64Mem32SX extends Load {
-      //override protected val HeadBytes: Vector[Byte] = Bytes(0x34)
-      override protected val memoryType: ValueType = ValueType.I64
-      override protected val size: Option[Size] = Some(Size(nodes.MemSize.`32`, Extension.SX))
+      override val Header: Byte = 0x34
+      override val memoryType: ValueType = ValueType.I64
+      override val size: Option[Size] = Some(Size(MemSize.`32`, Extension.SX))
     }
 
     object I64Mem32ZX extends Load {
-      //override protected val HeadBytes: Vector[Byte] = Bytes(0x35)
-      override protected val memoryType: ValueType = ValueType.I64
-      override protected val size: Option[Size] = Some(Size(nodes.MemSize.`32`, Extension.ZX))
+      override val Header: Byte = 0x35
+      override val memoryType: ValueType = ValueType.I64
+      override val size: Option[Size] = Some(Size(MemSize.`32`, Extension.ZX))
     }
 
   }
 
-  type Store = M[nodes.MemSize]
+  type Store = M[MemSize]
 
   object Store {
 
     object I32None extends Store {
-      //override protected val HeadBytes: Vector[Byte] = Bytes(0x36)
-      override protected val memoryType: ValueType = ValueType.I32
-      override protected val size: Option[nodes.MemSize] = None
+      override val Header: Byte = 0x36
+      override val memoryType: ValueType = ValueType.I32
+      override val size: Option[MemSize] = None
     }
 
     object I64None extends Store {
-      //override protected val HeadBytes: Vector[Byte] = Bytes(0x37)
-      override protected val memoryType: ValueType = ValueType.I64
-      override protected val size: Option[nodes.MemSize] = None
+      override val Header: Byte = 0x37
+      override val memoryType: ValueType = ValueType.I64
+      override val size: Option[MemSize] = None
     }
 
     object F32None extends Store {
-      //override protected val HeadBytes: Vector[Byte] = Bytes(0x38)
-      override protected val memoryType: ValueType = ValueType.F32
-      override protected val size: Option[nodes.MemSize] = None
+      override val Header: Byte = 0x38
+      override val memoryType: ValueType = ValueType.F32
+      override val size: Option[MemSize] = None
     }
 
     object F64None extends Store {
-      //override protected val HeadBytes: Vector[Byte] = Bytes(0x39)
-      override protected val memoryType: ValueType = ValueType.F64
-      override protected val size: Option[nodes.MemSize] = None
+      override val Header: Byte = 0x39
+      override val memoryType: ValueType = ValueType.F64
+      override val size: Option[MemSize] = None
     }
 
     object I32Mem8 extends Store {
-      //override protected val HeadBytes: Vector[Byte] = Bytes(0x3a)
-      override protected val memoryType: ValueType = ValueType.I32
-      override protected val size: Option[nodes.MemSize] = Some(nodes.MemSize.`8`)
+      override val Header: Byte = 0x3a
+      override val memoryType: ValueType = ValueType.I32
+      override val size: Option[MemSize] = Some(MemSize.`8`)
     }
 
     object I32Mem16 extends Store {
-      //override protected val HeadBytes: Vector[Byte] = Bytes(0x3b)
-      override protected val memoryType: ValueType = ValueType.I32
-      override protected val size: Option[nodes.MemSize] = Some(nodes.MemSize.`16`)
+      override val Header: Byte = 0x3b
+      override val memoryType: ValueType = ValueType.I32
+      override val size: Option[MemSize] = Some(MemSize.`16`)
     }
 
     object I64Mem8 extends Store {
-      //override protected val HeadBytes: Vector[Byte] = Bytes(0x3c)
-      override protected val memoryType: ValueType = ValueType.I64
-      override protected val size: Option[nodes.MemSize] = Some(nodes.MemSize.`8`)
+      override val Header: Byte = 0x3c
+      override val memoryType: ValueType = ValueType.I64
+      override val size: Option[MemSize] = Some(MemSize.`8`)
     }
 
     object I64Mem16 extends Store {
-      //override protected val HeadBytes: Vector[Byte] = Bytes(0x3d)
-      override protected val memoryType: ValueType = ValueType.I64
-      override protected val size: Option[nodes.MemSize] = Some(nodes.MemSize.`16`)
+      override val Header: Byte = 0x3d
+      override val memoryType: ValueType = ValueType.I64
+      override val size: Option[MemSize] = Some(MemSize.`16`)
     }
 
     object I64Mem32 extends Store {
-      //override protected val HeadBytes: Vector[Byte] = Bytes(0x3e)
-      override protected val memoryType: ValueType = ValueType.I64
-      override protected val size: Option[nodes.MemSize] = Some(nodes.MemSize.`32`)
+      override val Header: Byte = 0x3e
+      override val memoryType: ValueType = ValueType.I64
+      override val size: Option[MemSize] = Some(MemSize.`32`)
     }
 
   }
 
 }
 
-case object CurrentMemory extends Instruction
+case object CurrentMemory extends Instruction.Singleton {
+  override val Header: Byte = 0x3f
+  override lazy val headerCodec: Codec[Unit] = codecs.constant(ByteVector(Header, 0x00))
+}
 
-case object GrowMemory extends Instruction
+case object GrowMemory extends Instruction.Singleton {
+  override val Header: Byte = 0x40
+  override lazy val headerCodec: Codec[Unit] = codecs.constant(ByteVector(Header, 0x00))
+}
 
 trait Const[A] extends Instruction {
   val value: A
@@ -343,299 +492,441 @@ trait Const[A] extends Instruction {
 
 object Const {
 
-  case class I32(override val value: Int) extends Const[Int] {
-//    override def HeadBytes: Var = 0x41
+  case class I32(override val value: Int) extends Const[Int]
+
+  object I32 extends Instruction.Companion {
+    override type I = I32
+    override val Header: Byte = 0x41
+    override val codec: Codec[I32] =
+      headerCodec ~ wcodecs.vs32 xmap(
+        x => I32(x._2),
+        i => unapply(i) match {
+          case Some(value) => ((), value)
+          case None => ???
+        }
+      )
   }
 
-  case class I64(override val value: Long) extends Const[Long] {
-//    override def HeadBytes: Var = 0x42
+  case class I64(override val value: Long) extends Const[Long]
+
+  object I64 extends Instruction.Companion {
+    override type I = I64
+    override val Header: Byte = 0x42
+    override val codec: Codec[I64] =
+      headerCodec ~ wcodecs.vs64 xmap(
+        x => I64(x._2),
+        i => unapply(i) match {
+          case Some(value) => ((), value)
+          case None => ???
+        }
+      )
   }
 
-  case class F32(override val value: Float) extends Const[Float] {
-//    override def HeadBytes: Var = 0x43
+  case class F32(override val value: Float) extends Const[Float]
+
+  object F32 extends Instruction.Companion {
+    override type I = F32
+    override val Header: Byte = 0x43
+    override val codec: Codec[F32] =
+      headerCodec ~ wcodecs.vs32 xmap(
+        x => F32(java.lang.Float.intBitsToFloat(x._2)),
+        i => unapply(i) match {
+          case Some(value) => ((), java.lang.Float.floatToIntBits(value))
+          case None => ???
+        }
+      )
   }
 
-  case class F64(override val value: Double) extends Const[Double] {
-//    override def HeadBytes: Var = 0x44
+  case class F64(override val value: Double) extends Const[Double]
+
+  object F64 extends Instruction.Companion {
+    override type I = F64
+    override val Header: Byte = 0x44
+    override val codec: Codec[F64] =
+      headerCodec ~ wcodecs.vs64 xmap(
+        x => F64(java.lang.Double.longBitsToDouble(x._2)),
+        i => unapply(i) match {
+          case Some(value) => ((), java.lang.Double.doubleToLongBits(value))
+          case None => ???
+        }
+      )
   }
 
 }
 
-trait Op extends Instruction
+trait Op extends Instruction.Singleton
 
 sealed trait Ops {
   trait Unary extends Op
 
+  val unary: Set[Unary]
+
   trait Binary extends Op
+
+  val binary: Set[Binary]
 
   trait Test extends Op
 
+  val test: Set[Test]
+
   trait Relation extends Op
 
+  val relation: Set[Relation]
+
   trait Convert extends Op
+
+  val convert: Set[Convert]
+
+  lazy val all: Set[Op] =
+    unary ++ binary ++ test ++ relation ++ convert
 }
 
 trait IntOps extends Ops {
 
-  def unaryOffset: Int
+  def unaryOffset: Byte
 
   case object Clz extends Unary {
-    //override protected val HeadBytes = unaryOffset
+    override val Header: Byte = unaryOffset
   }
   case object Ctz extends Unary {
-    //override def HeadBytes: Int = unaryOffset + 1
+    override val Header: Byte = (unaryOffset + 1).toByte
   }
   case object Popcnt extends Unary {
-    //override def HeadBytes: Int = unaryOffset + 2
+    override val Header: Byte = (unaryOffset + 2).toByte
   }
 
-  def binaryOffset: Int
+  override val unary: Set[Unary] = Set(Clz, Ctz, Popcnt)
+
+  def binaryOffset: Byte
 
   case object Add extends Binary {
-    //override def HeadBytes: Int = binaryOffset
+    override val Header: Byte = binaryOffset
   }
   case object Sub extends Binary {
-    //override def HeadBytes: Int = binaryOffset + 1
+    override val Header: Byte = (binaryOffset + 1).toByte
   }
   case object Mul extends Binary {
-    //override def HeadBytes: Int = binaryOffset + 2
+    override val Header: Byte = (binaryOffset + 2).toByte
   }
   case object DivS extends Binary {
-    //override def HeadBytes: Int = binaryOffset + 3
+    override val Header: Byte = (binaryOffset + 3).toByte
   }
   case object DivU extends Binary {
-    //override def HeadBytes: Int = binaryOffset + 4
+    override val Header: Byte = (binaryOffset + 4).toByte
   }
   case object RemS extends Binary {
-    //override def HeadBytes: Int = binaryOffset + 5
+    override val Header: Byte = (binaryOffset + 5).toByte
   }
   case object RemU extends Binary {
-    //override def HeadBytes: Int = binaryOffset + 6
+    override val Header: Byte = (binaryOffset + 6).toByte
   }
   case object And extends Binary {
-    //override def HeadBytes: Int = binaryOffset + 7
+    override val Header: Byte = (binaryOffset + 7).toByte
   }
   case object Or extends Binary {
-    //override def HeadBytes: Int = binaryOffset + 8
+    override val Header: Byte = (binaryOffset + 8).toByte
   }
   case object Xor extends Binary {
-    //override def HeadBytes: Int = binaryOffset + 9
+    override val Header: Byte = (binaryOffset + 9).toByte
   }
   case object Shl extends Binary {
-    //override def HeadBytes: Int = binaryOffset + 10
+    override val Header: Byte = (binaryOffset + 10).toByte
   }
   case object ShrS extends Binary {
-    //override def HeadBytes: Int = binaryOffset + 11
+    override val Header: Byte = (binaryOffset + 11).toByte
   }
   case object ShrU extends Binary {
-    //override def HeadBytes: Int = binaryOffset + 12
+    override val Header: Byte = (binaryOffset + 12).toByte
   }
   case object Rotl extends Binary {
-    //override def HeadBytes: Int = binaryOffset + 13
+    override val Header: Byte = (binaryOffset + 13).toByte
   }
   case object Rotr extends Binary {
-    //override def HeadBytes: Int = binaryOffset + 14
+    override val Header: Byte = (binaryOffset + 14).toByte
   }
 
-  def testOffset: Int
+  override val binary: Set[Binary] =
+    Set(
+      Add,
+      Sub,
+      Mul,
+      DivS,
+      DivU,
+      RemS,
+      RemU,
+      And,
+      Or,
+      Xor,
+      Shl,
+      ShrS,
+      ShrU,
+      Rotl,
+      Rotr,
+    )
+
+  def testOffset: Byte
 
   case object Eqz extends Test {
-    //override def HeadBytes: Int = testOffset
+    override val Header: Byte = testOffset
   }
 
-  def relationOffset: Int
+  override val test: Set[Test] = Set(Eqz)
+
+  def relationOffset: Byte
 
   case object Eq extends Relation {
-    //override def HeadBytes: Int = relationOffset
+    override val Header: Byte = relationOffset
   }
   case object Ne extends Relation {
-    //override def HeadBytes: Int = relationOffset + 1
+    override val Header: Byte = (relationOffset + 1).toByte
   }
   case object LtS extends Relation {
-    //override def HeadBytes: Int = relationOffset + 2
+    override val Header: Byte = (relationOffset + 2).toByte
   }
   case object LtU extends Relation {
-    //override def HeadBytes: Int = relationOffset + 3
+    override val Header: Byte = (relationOffset + 3).toByte
   }
   case object GtS extends Relation {
-    //override def HeadBytes: Int = relationOffset + 4
+    override val Header: Byte = (relationOffset + 4).toByte
   }
   case object GtU extends Relation {
-    //override def HeadBytes: Int = relationOffset + 5
+    override val Header: Byte = (relationOffset + 5).toByte
   }
   case object LeS extends Relation {
-    //override def HeadBytes: Int = relationOffset + 6
+    override val Header: Byte = (relationOffset + 6).toByte
   }
   case object LeU extends Relation {
-    //override def HeadBytes: Int = relationOffset + 7
+    override val Header: Byte = (relationOffset + 7).toByte
   }
   case object GeS extends Relation {
-    //override def HeadBytes: Int = relationOffset + 8
+    override val Header: Byte = (relationOffset + 8).toByte
   }
   case object GeU extends Relation {
-    //override def HeadBytes: Int = relationOffset + 9
+    override val Header: Byte = (relationOffset + 9).toByte
   }
 
-  def convertOffset: Int
+  override val relation: Set[Relation] =
+    Set(
+      Eq,
+      Ne,
+      LtS,
+      LtU,
+      GtS,
+      GtU,
+      LeS,
+      LeU,
+      GeS,
+      GeU,
+    )
+
+  def convertOffset: Byte
 
   case object ExtendSI32 extends Convert {
-    //override def HeadBytes: Int = convertOffset
+    override val Header: Byte = convertOffset
   }
   case object ExtendUI32 extends Convert {
-    //override def HeadBytes: Int = convertOffset + 1
+    override val Header: Byte = (convertOffset + 1).toByte
   }
   case object WrapI64 extends Convert {
-    //override def HeadBytes: Int = convertOffset + 2
+    override val Header: Byte = (convertOffset + 2).toByte
   }
   case object TruncSF32 extends Convert {
-    //override def HeadBytes: Int = convertOffset + 3
+    override val Header: Byte = (convertOffset + 3).toByte
   }
   case object TruncUF32 extends Convert {
-    //override def HeadBytes: Int = convertOffset + 4
+    override val Header: Byte = (convertOffset + 4).toByte
   }
   case object TruncSF64 extends Convert {
-    //override def HeadBytes: Int = convertOffset + 5
+    override val Header: Byte = (convertOffset + 5).toByte
   }
   case object TruncUF64 extends Convert {
-    //override def HeadBytes: Int = convertOffset + 6
+    override val Header: Byte = (convertOffset + 6).toByte
   }
   case object ReinterpretFloat extends Convert {
-    //override def HeadBytes: Int = convertOffset + 7
+    override val Header: Byte = (convertOffset + 7).toByte
   }
 
+  override val convert: Set[Convert] =
+    Set(
+      ExtendSI32,
+      ExtendUI32,
+      WrapI64,
+      TruncSF32,
+      TruncUF32,
+      TruncSF64,
+      TruncUF64,
+      ReinterpretFloat,
+    )
 }
 
 trait FloatOps extends Ops {
 
-  def unaryOffset: Int
+  def unaryOffset: Byte
 
   case object Neg extends Unary {
-    //override def HeadBytes: Int = unaryOffset
+    override val Header: Byte = unaryOffset
   }
   case object Abs extends Unary {
-    //override def HeadBytes: Int = unaryOffset + 1
+    override val Header: Byte = (unaryOffset + 1).toByte
   }
   case object Ceil extends Unary {
-    //override def HeadBytes: Int = unaryOffset + 2
+    override val Header: Byte = (unaryOffset + 2).toByte
   }
   case object Floor extends Unary {
-    //override def HeadBytes: Int = unaryOffset + 3
+    override val Header: Byte = (unaryOffset + 3).toByte
   }
   case object Trunc extends Unary {
-    //override def HeadBytes: Int = unaryOffset + 4
+    override val Header: Byte = (unaryOffset + 4).toByte
   }
   case object Nearest extends Unary {
-    //override def HeadBytes: Int = unaryOffset + 5
+    override val Header: Byte = (unaryOffset + 5).toByte
   }
   case object Sqrt extends Unary {
-    //override def HeadBytes: Int = unaryOffset + 6
+    override val Header: Byte = (unaryOffset + 6).toByte
   }
 
-  def binaryOffset: Int
+  override val unary: Set[Unary] =
+    Set(
+      Neg,
+      Abs,
+      Ceil,
+      Floor,
+      Trunc,
+      Nearest,
+      Sqrt,
+    )
+
+  def binaryOffset: Byte
 
   case object Add extends Binary {
-    //override def HeadBytes: Int = binaryOffset
+    override val Header: Byte = binaryOffset
   }
   case object Sub extends Binary {
-    //override def HeadBytes: Int = binaryOffset + 1
+    override val Header: Byte = (binaryOffset + 1).toByte
   }
   case object Mul extends Binary {
-    //override def HeadBytes: Int = binaryOffset + 2
+    override val Header: Byte = (binaryOffset + 2).toByte
   }
   case object Div extends Binary {
-    //override def HeadBytes: Int = binaryOffset + 3
+    override val Header: Byte = (binaryOffset + 3).toByte
   }
   case object Min extends Binary {
-    //override def HeadBytes: Int = binaryOffset + 4
+    override val Header: Byte = (binaryOffset + 4).toByte
   }
   case object Max extends Binary {
-    //override def HeadBytes: Int = binaryOffset + 5
+    override val Header: Byte = (binaryOffset + 5).toByte
   }
   case object CopySign extends Binary {
-    //override def HeadBytes: Int = binaryOffset + 6
+    override val Header: Byte = (binaryOffset + 6).toByte
   }
 
-  def testOffset: Int
+  override val binary: Set[Binary] =
+    Set(
+      Add,
+      Sub,
+      Mul,
+      Div,
+      Min,
+      Max,
+      CopySign,
+    )
 
-  case object Eqz extends Test {
-    //override def HeadBytes: Int = testOffset
-  }
+  override val test: Set[Test] = Set()
 
-  def relationOffset: Int
+  def relationOffset: Byte
 
   case object Eq extends Relation {
-    //override def HeadBytes: Int = relationOffset
+    override val Header: Byte = relationOffset
   }
   case object Ne extends Relation {
-    //override def HeadBytes: Int = relationOffset + 1
+    override val Header: Byte = (relationOffset + 1).toByte
   }
   case object Lt extends Relation {
-    //override def HeadBytes: Int = relationOffset + 2
+    override val Header: Byte = (relationOffset + 2).toByte
   }
   case object Gt extends Relation {
-    //override def HeadBytes: Int = relationOffset + 3
+    override val Header: Byte = (relationOffset + 3).toByte
   }
   case object Le extends Relation {
-    //override def HeadBytes: Int = relationOffset + 4
+    override val Header: Byte = (relationOffset + 4).toByte
   }
   case object Ge extends Relation {
-    //override def HeadBytes: Int = relationOffset + 5
+    override val Header: Byte = (relationOffset + 5).toByte
   }
 
-  def convertOffset: Int
+
+  override val relation: Set[Relation] =
+    Set(
+      Eq,
+      Ne,
+      Lt,
+      Gt,
+      Le,
+      Gt,
+    )
+
+  def convertOffset: Byte
 
   case object ConvertSI32 extends Convert {
-    //override def HeadBytes: Int = convertOffset
+    override val Header: Byte = convertOffset
   }
   case object ConvertUI32 extends Convert {
-    //override def HeadBytes: Int = convertOffset + 1
+    override val Header: Byte = (convertOffset + 1).toByte
   }
   case object ConvertSI64 extends Convert {
-    //override def HeadBytes: Int = convertOffset + 2
+    override val Header: Byte = (convertOffset + 2).toByte
   }
   case object ConvertUI64 extends Convert {
-    //override def HeadBytes: Int = convertOffset + 3
+    override val Header: Byte = (convertOffset + 3).toByte
   }
   case object PromoteF32 extends Convert {
-    //override def HeadBytes: Int = convertOffset + 4
+    override val Header: Byte = (convertOffset + 4).toByte
   }
   case object DemoteF64 extends Convert {
-    //override def HeadBytes: Int = convertOffset + 5
+    override val Header: Byte = (convertOffset + 5).toByte
   }
   case object ReinterpretInt extends Convert {
-    //override def HeadBytes: Int = convertOffset + 6
+    override val Header: Byte = (convertOffset + 6).toByte
   }
 
+  override val convert: Set[Convert] =
+    Set(
+      ConvertSI32,
+      ConvertUI32,
+      ConvertSI64,
+      ConvertUI64,
+      PromoteF32,
+      DemoteF64,
+      ReinterpretInt,
+    )
 }
 
 object I32Ops extends IntOps {
-  override def unaryOffset: Int = 0x67
-  override def binaryOffset: Int = 0x6a
-  override def testOffset: Int = 0x45
-  override def relationOffset: Int = 0x46
-  override def convertOffset: Int = 0xbc
+  override def unaryOffset: Byte = 0x67
+  override def binaryOffset: Byte = 0x6a
+  override def testOffset: Byte = 0x45
+  override def relationOffset: Byte = 0x46
+  override def convertOffset: Byte = 0xbc.toByte
 }
 
 object I64Ops extends IntOps {
-  override def unaryOffset: Int = 0x79
-  override def binaryOffset: Int = 0x7c
-  override def testOffset: Int = 0x50
-  override def relationOffset: Int = 0x51
-  override def convertOffset: Int = 0xbd
+  override def unaryOffset: Byte = 0x79
+  override def binaryOffset: Byte = 0x7c
+  override def testOffset: Byte = 0x50
+  override def relationOffset: Byte = 0x51
+  override def convertOffset: Byte = 0xbd.toByte
 }
 
 object F32Ops extends FloatOps {
-  override def unaryOffset: Int = 0x8b
-  override def binaryOffset: Int = 0x92
-  override def testOffset: Int = ???
-  override def relationOffset: Int = 0x5b
-  override def convertOffset: Int = 0xbe
+  override def unaryOffset: Byte = 0x8b.toByte
+  override def binaryOffset: Byte = 0x92.toByte
+  override def relationOffset: Byte = 0x5b
+  override def convertOffset: Byte = 0xbe.toByte
 }
 
 object F64Ops extends FloatOps {
-  override def unaryOffset: Int = 0x99
-  override def binaryOffset: Int = 0xa0
-  override def testOffset: Int = ???
-  override def relationOffset: Int = 0x61
-  override def convertOffset: Int = 0xb7
+  override def unaryOffset: Byte = 0x99.toByte
+  override def binaryOffset: Byte = 0xa0.toByte
+  override def relationOffset: Byte = 0x61
+  override def convertOffset: Byte = 0xb7.toByte
 }

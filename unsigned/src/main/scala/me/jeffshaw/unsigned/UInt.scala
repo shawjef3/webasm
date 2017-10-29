@@ -2,11 +2,11 @@ package me.jeffshaw.unsigned
 
 import scala.collection.mutable.ArrayBuffer
 
-case class UInt(i: Int) {
+case class UInt(private[unsigned] val i: Int) {
   def toByte: Byte = i.toByte
   def toShort: Short = i.toShort
   def toChar: Char = i.toChar
-  def toInt: Int = i.toInt
+  def toInt: Int = i
   def toLong: Long = i & 0xffffffffL
   def toULong: ULong = ULong(
     if (i < 0)
@@ -190,14 +190,14 @@ object UInt {
     UInt(-1)
 
   def valueOf(x: String, radix: Int = 10): UInt =
-    UInt(java.lang.Integer.parseUnsignedInt(x))
+    UInt(java.lang.Integer.parseUnsignedInt(x, radix))
 
   implicit def uint2float(x: UInt): Float = x.toFloat
 
   implicit def uint2double(x: UInt): Double = x.toDouble
 
   //avoids boxing
-  class Buffer(vals: scala.collection.mutable.Buffer[Int] = ArrayBuffer[Int]()) extends scala.collection.mutable.Buffer[UInt]() {
+  class Buffer(vals: ArrayBuffer[Int]) extends scala.collection.mutable.Buffer[UInt]() {
 
     override def update(n: Int, newelem: UInt): Unit = vals.update(n, newelem.i)
 
@@ -236,7 +236,9 @@ object UInt {
 
   object Buffer {
     def apply(vals: UInt*): Buffer =
-      new Buffer(vals.map(_.i).toBuffer)
+      new Buffer(ArrayBuffer(vals.map(_.i): _*))
+
+    def empty: Buffer = new Buffer(ArrayBuffer.empty)
   }
 
 }
