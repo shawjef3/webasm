@@ -26,9 +26,9 @@ object GlobalType {
 
       override def decode(s: Sexpr): GlobalType = {
         s match {
-          case a: Sexpr.Atom =>
+          case Sexpr.Singleton(atom) =>
             GlobalType(
-              Sexpr.Codec[ValueType].decode(a),
+              Sexpr.Codec[ValueType].decode(atom),
               Immutable
             )
           case Sexpr.Node(Vector(Sexpr.Atom("mut"), t)) =>

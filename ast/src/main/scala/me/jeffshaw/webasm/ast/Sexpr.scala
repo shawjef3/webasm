@@ -3,6 +3,7 @@ package me.jeffshaw.webasm.ast
 import fastparse.all.{End => InputEnd, _}
 import fastparse.parsers.Combinators.Not
 import me.jeffshaw.unsigned.UInt
+import scala.annotation.tailrec
 
 sealed trait Sexpr {
   def ++(that: Sexpr): Sexpr
@@ -42,6 +43,27 @@ object Sexpr {
   object Node {
     def apply(singleton: Sexpr): Node = {
       Node(Vector(singleton))
+    }
+  }
+
+  /**
+    * For matching an `Atom` that is on its own, or the only
+    * value in a `Node`.
+    * It matches any level of `Node` embedding. For instance,
+    * it will find the `Atom` in `Node(Vector(Atom))`, or
+    * `Node(Vector(Node(Vector(Atom))))`.
+    */
+  object Singleton {
+    @tailrec
+    def unapply(s: Sexpr): Option[Atom] = {
+      s match {
+        case a: Atom =>
+          Some(a)
+        case Node(Vector(maybeAtom)) =>
+          unapply(maybeAtom)
+        case _ =>
+          None
+      }
     }
   }
 

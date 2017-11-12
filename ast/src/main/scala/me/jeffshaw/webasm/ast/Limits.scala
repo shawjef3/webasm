@@ -36,11 +36,9 @@ object Limits {
 
       override def decode(s: Sexpr): Limits[A] =
         s match {
-          case min: Sexpr.Atom =>
+          case Sexpr.Singleton(min) =>
             Limits(min = inner.decode(min), max = None)
-          case Sexpr.Node(Vector(min)) =>
-            Limits(min = inner.decode(min), max = None)
-          case Sexpr.Node(Vector(min, max)) =>
+          case Sexpr.Node(Vector(Sexpr.Singleton(min), Sexpr.Singleton(max))) =>
             Limits(min = inner.decode(min), max = Some(inner.decode(max)))
         }
     }
