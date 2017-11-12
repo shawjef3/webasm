@@ -28,4 +28,20 @@ object Limits {
 
   implicit val intCodec: Codec[Limits[UInt]] =
     codecAux[UInt](wcodecs.vu32)
+
+  implicit def sCodec[A](implicit inner: Sexpr.Codec[A]): Sexpr.Codec[Limits[A]] =
+    new Sexpr.Codec[Limits[A]] {
+      override def encode(value: Limits[A]): Sexpr =
+        inner.encode(value.min) ++ Sexpr.Node(value.max.toVector.map(inner.encode))
+
+      override def decode(s: Sexpr): Limits[A] =
+        s match {
+          case min: Sexpr.Atom =>
+            Limits(min = inner.decode(min), max = None)
+          case Sexpr.Node(Vector(min)) =>
+            Limits(min = inner.decode(min), max = None)
+          case Sexpr.Node(Vector(min, max)) =>
+            Limits(min = inner.decode(min), max = Some(inner.decode(max)))
+        }
+    }
 }

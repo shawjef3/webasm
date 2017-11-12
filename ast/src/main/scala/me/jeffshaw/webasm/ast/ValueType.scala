@@ -47,4 +47,14 @@ object ValueType {
         }
     )
 
+  implicit val sCodec: Sexpr.Codec[ValueType] =
+    Sexpr.Codec.Maps.symmetric(
+      Map(
+        I32 -> Sexpr.Atom("i32"),
+        I64 -> Sexpr.Atom("i64"),
+        F32 -> Sexpr.Atom("f32"),
+        F64 -> Sexpr.Atom("f64"),
+      )
+    )
+
 }

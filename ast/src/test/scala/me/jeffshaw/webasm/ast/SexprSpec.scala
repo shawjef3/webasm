@@ -39,48 +39,48 @@ class SexprSpec extends FunSuite {
 object SexprSpec {
   val goodSexprs: Map[String, Sexpr] =
     Map(
-      "(x \"\")" -> Node("x", Vector(Atom("\"\""))),
-      "(x)" -> Node("x"),
-      "(x y)" -> Node("x", Vector(Atom("y"))),
+      "(x \"\")" -> Node(Vector(Atom("x"), Atom("\"\""))),
+      "(x)" -> Node(Atom("x")),
+      "(x y)" -> Node(Vector(Atom("x"), Atom("y"))),
       "x" -> Atom("x"),
       "(func (export \"\uD800\uDC00\uDB3F\uDFFF\uDBFF\uDFFF\") (result i32) (i32.const 44))" ->
         Node(
-          "func",
           Vector(
+          Atom("func"),
             Node(
-              "export",
               Vector(
+                Atom("export"),
                 Atom("\"\uD800\uDC00\uDB3F\uDFFF\uDBFF\uDFFF\""),
               )
             ),
-            Node("result", Vector(Atom("i32"))),
-            Node("i32.const", Vector(Atom("44")))
+            Node(Vector(Atom("result"), Atom("i32"))),
+            Node(Vector(Atom("i32.const"), Atom("44")))
           )
         ),
       "(module (func (export \"\uD800\uDC00\uDB3F\uDFFF\uDBFF\uDFFF\") (result i32) (i32.const 44)))" ->
         Node(
-          "module",
           Vector(
+            Atom("module"),
             Node(
-              "func",
               Vector(
+                Atom("func"),
                 Node(
-                  "export",
                   Vector(
+                    Atom("export"),
                     Atom("\"\uD800\uDC00\uDB3F\uDFFF\uDBFF\uDFFF\""),
                   )
                 ),
-                Node("result", Vector(Atom("i32"))),
-                Node("i32.const", Vector(Atom("44")))
+                Node(Vector(Atom("result"), Atom("i32"))),
+                Node(Vector(Atom("i32.const"), Atom("44")))
               )
             )
           )
         ),
-      "(x);;" -> Node("x"),
-      ";;\n(x)" -> Node("x"),
-      "(x)\n(;;)" -> Node("x"),
-      "(;\n;)(x)" -> Node("x"),
-      "(;\n(;;);)(x)" -> Node("x")
+      "(x);;" -> Node(Atom("x")),
+      ";;\n(x)" -> Node(Atom("x")),
+      "(x)\n(;;)" -> Node(Atom("x")),
+      "(;\n;)(x)" -> Node(Atom("x")),
+      "(;\n(;;);)(x)" -> Node(Atom("x"))
     )
 
   val badSexprs =

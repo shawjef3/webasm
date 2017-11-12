@@ -2,14 +2,48 @@ package me.jeffshaw.webasm.ast
 
 import fastparse.all.{End => InputEnd, _}
 import fastparse.parsers.Combinators.Not
+import me.jeffshaw.unsigned.UInt
 
-sealed trait Sexpr
+sealed trait Sexpr {
+  def ++(that: Sexpr): Sexpr
+}
 
 object Sexpr {
 
-  case class Atom(value: String) extends Sexpr
+  case class Atom(value: String) extends Sexpr {
+    override def toString: String = value
 
-  case class Node(head: String, tails: Vector[Sexpr] = Vector.empty) extends Sexpr
+    override def ++(that: Sexpr): Sexpr = {
+      that match {
+        case Node(Vector()) =>
+          this
+        case Node(values) =>
+          Node(this +: values)
+        case a: Atom =>
+          Node(Vector(this, a))
+      }
+    }
+  }
+
+  case class Node(values: Vector[Sexpr]) extends Sexpr {
+    override lazy val toString: String =
+      values.mkString("(", " ", ")")
+
+    override def ++(that: Sexpr): Sexpr = {
+      that match {
+        case Node(otherValues) =>
+          Node(values ++ otherValues)
+        case a: Atom =>
+          Node(values :+ a)
+      }
+    }
+  }
+
+  object Node {
+    def apply(singleton: Sexpr): Node = {
+      Node(Vector(singleton))
+    }
+  }
 
   def parse(s: String): Sexpr = {
     Parsers.sexpr.parse(s) match {
@@ -68,7 +102,7 @@ object Sexpr {
           atom |
             list.map {
               case (head, tails) =>
-                Sexpr.Node(head, tails.toVector)
+                Sexpr.Node(Atom(head) +: tails.toVector)
             }
         )
       )
@@ -95,6 +129,135 @@ object Sexpr {
           "(" ~ !";" |
           BlockComment
       ).rep ~ ";)")
+
+  }
+
+  trait Codec[A] {
+    def encode(value: A): Sexpr
+    def decode(s: Sexpr): A
+  }
+
+  object Codec {
+    def apply[A](implicit c: Codec[A]): Codec[A] = c
+
+    trait Partial[A] extends Codec[A] {
+      outer =>
+
+      override def encode(value: A): Sexpr =
+        encoder(value)
+
+      override def decode(s: Sexpr): A =
+        decoder(s)
+
+      val encoder: PartialFunction[A, Sexpr]
+      val decoder: PartialFunction[Sexpr, A]
+
+      def orElse(that: Partial[A]): Partial[A] =
+        new Partial[A] {
+          override val encoder: PartialFunction[A, Sexpr] =
+            outer.encoder.orElse(that.encoder)
+          override val decoder: PartialFunction[Sexpr, A] =
+            outer.decoder.orElse(that.decoder)
+        }
+
+      def lifted: Codec[Option[A]] =
+        new Codec[Option[A]] {
+          override def encode(value: Option[A]): Sexpr =
+            value.flatMap(outer.encoder.lift).getOrElse(Node(Vector()))
+
+          override def decode(s: Sexpr): Option[A] =
+            outer.decoder.lift(s)
+        }
+    }
+
+    case class Maps[A](
+      to: Map[A, Sexpr],
+      from: Map[Sexpr, A]
+    ) extends Codec[A] {
+      override def encode(value: A): Sexpr = to(value)
+
+      override def decode(s: Sexpr): A = from(s)
+    }
+
+    object Maps {
+      def symmetric[A](to: Map[A, Sexpr]): Maps[A] =
+        Maps(
+          to = to,
+          from = to.map(_.swap)
+        )
+    }
+  }
+
+  object Utils {
+    implicit val int: Codec[Int] =
+      new Codec[Int] {
+        override def encode(value: Int): Sexpr =
+          Codec[UInt].encode(UInt(value))
+
+        override def decode(s: Sexpr): Int =
+          Codec[UInt].decode(s).toInt
+      }
+
+    implicit val int32: Codec[UInt] =
+      new Codec[UInt] {
+        override def encode(value: Var): Sexpr =
+          Atom(value.toString)
+
+        override def decode(s: Sexpr): Var =
+          s match {
+            case Atom(value) =>
+              UInt.valueOf(value)
+            case _ => ???
+          }
+      }
+
+    def stringWith(s: String, trans: Int => Seq[Int]): String = {
+      val codePoints = s.codePoints.toArray
+      codePoints.flatMap(trans).flatMap(java.lang.Character.toChars(_)).mkString("\"", "", "\"")
+    }
+
+    val bytesToEscape =
+      Set('\n', '\t', '"', '\\').map(_.toInt)
+
+    def hexChar(c: Int): Seq[Int] =
+      ("\\" + c.formatted("%02x")).codePoints.toArray
+
+    def bytes(s: String): String =
+      stringWith(s, hexChar)
+
+    def `string`(s: String): String = {
+      stringWith(s,
+        {
+          case c if bytesToEscape.contains(c) => Seq('\\'.toInt, c)
+          case c if 0x20 <= c && c < 0x7f =>
+            Seq(c)
+          case c =>
+            hexChar(c)
+        }
+      )
+    }
+
+    def name(s: String): String =
+      stringWith(s,
+        {
+          case c if (0x20 <= c && c < 0x7f)
+            || c == 0x9 || c == 0xa =>
+            Seq(c)
+          case c =>
+            Seq('\\'.toInt, 'u'.toInt, '{'.toInt) ++
+              c.formatted("%x02").map(_.toInt)
+        }
+      )
+
+    def tab[A](head: String, xs: Vector[A])(implicit codec: Codec[A]): Sexpr =
+      Node(
+        if (xs.isEmpty)
+          Vector.empty
+        else Atom(head) +: xs.map(codec.encode)
+      )
+
+    def limits[A](f: A => Sexpr, limits: Limits[A]): Sexpr =
+      Node(f(limits.min) +: limits.max.map(f).toVector)
 
   }
 
