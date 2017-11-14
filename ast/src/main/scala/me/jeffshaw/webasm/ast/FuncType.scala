@@ -10,8 +10,8 @@ case class FuncType(
 object FuncType {
   implicit val codec: Codec[FuncType] =
     wcodecs.u8Const(0x40) ~
-      wcodecs.vec(ValueType.codec) ~
-      wcodecs.vec(ValueType.codec) xmap(
+      StackType.codec ~
+      StackType.codec xmap(
       {
         case (((), argumentTypes), returns) =>
           FuncType(argumentTypes, returns)

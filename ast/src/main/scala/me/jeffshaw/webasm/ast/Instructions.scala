@@ -59,4 +59,13 @@ object Instructions {
       i => (i, End)
     )
 
+  implicit val sCodec: Sexpr.Codec[Instructions] =
+    new Sexpr.Codec[Instructions] {
+      override def encode(value: Instructions): Sexpr =
+        Sexpr.Node(value.instructions.map(Sexpr.Codec[Instruction].encode))
+
+      override def decode(s: Sexpr): Instructions =
+        Instructions(s.values.map(Sexpr.Codec[Instruction].decode))
+    }
+
 }

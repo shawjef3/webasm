@@ -11,6 +11,4 @@ package object ast {
 
   type MemorySegment = Segment[ByteVector]
 
-  type StackType = Vector[ValueType]
-
 }

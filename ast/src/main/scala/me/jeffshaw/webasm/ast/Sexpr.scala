@@ -7,6 +7,8 @@ import scala.annotation.tailrec
 
 sealed trait Sexpr {
   def ++(that: Sexpr): Sexpr
+
+  def values: Vector[Sexpr]
 }
 
 object Sexpr {
@@ -24,9 +26,12 @@ object Sexpr {
           Node(Vector(this, a))
       }
     }
+
+    override lazy val values: Vector[Sexpr] =
+      Vector(this)
   }
 
-  case class Node(values: Vector[Sexpr]) extends Sexpr {
+  case class Node(override val values: Vector[Sexpr]) extends Sexpr {
     override lazy val toString: String =
       values.mkString("(", " ", ")")
 
@@ -61,6 +66,17 @@ object Sexpr {
           Some(a)
         case Node(Vector(maybeAtom)) =>
           unapply(maybeAtom)
+        case _ =>
+          None
+      }
+    }
+  }
+
+  object Cons {
+    def unapply(s: Sexpr): Option[(Sexpr, Sexpr)] = {
+      s match {
+        case Sexpr.Node(head +: tails) =>
+          Some((head, Sexpr.Node(tails)))
         case _ =>
           None
       }
@@ -185,7 +201,7 @@ object Sexpr {
       def lifted: Codec[Option[A]] =
         new Codec[Option[A]] {
           override def encode(value: Option[A]): Sexpr =
-            value.flatMap(outer.encoder.lift).getOrElse(Node(Vector()))
+            value.flatMap(outer.encoder.lift).get
 
           override def decode(s: Sexpr): Option[A] =
             outer.decoder.lift(s)

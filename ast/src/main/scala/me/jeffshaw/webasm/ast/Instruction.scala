@@ -9,81 +9,112 @@ import shapeless.syntax.std.product._
 sealed trait Instruction
 
 object Instruction {
-  implicit val codec: Codec[Instruction] = {
-    val all =
-      (I32Ops.all ++
-        I64Ops.all ++
-        F32Ops.all ++
-        F64Ops.all
-        ).toSeq.map(_.codec) ++
-        Seq(
-          Unreachable.codec,
-          Nop.codec,
-          Block.codec,
-          Loop.codec,
-          If.codec,
-          Else.codec,
-          Br.codec,
-          BrIf.codec,
-          BrTable.codec,
-          Return.codec,
-          Call.codec,
-          CallIndirect.codec,
-          Drop.codec,
-          End.codec,
-          Select.codec,
-          GetLocal.codec,
-          SetLocal.codec,
-          TeeLocal.codec,
-          GetGlobal.codec,
-          SetGlobal.codec,
-          MemoryOperation.Load.F32None.codec,
-          MemoryOperation.Load.F64None.codec,
-          MemoryOperation.Load.I32Mem8SZ.codec,
-          MemoryOperation.Load.I32Mem16SZ.codec,
-          MemoryOperation.Load.I32None.codec,
-          MemoryOperation.Load.I32Mem8ZX.codec,
-          MemoryOperation.Load.I32Mem16ZX.codec,
-          MemoryOperation.Load.I64Mem8SX.codec,
-          MemoryOperation.Load.I64Mem8ZX.codec,
-          MemoryOperation.Load.I64Mem16SX.codec,
-          MemoryOperation.Load.I64Mem16ZX.codec,
-          MemoryOperation.Load.I64Mem32SX.codec,
-          MemoryOperation.Load.I64Mem32ZX.codec,
-          MemoryOperation.Load.I64None.codec,
-          MemoryOperation.Store.F32None.codec,
-          MemoryOperation.Store.F64None.codec,
-          MemoryOperation.Store.I32Mem8.codec,
-          MemoryOperation.Store.I32Mem16.codec,
-          MemoryOperation.Store.I32None.codec,
-          MemoryOperation.Store.I64Mem8.codec,
-          MemoryOperation.Store.I64Mem16.codec,
-          MemoryOperation.Store.I64Mem32.codec,
-          MemoryOperation.Store.I64None.codec,
-          CurrentMemory.codec,
-          GrowMemory.codec,
-          Const.I32.codec,
-          Const.I64.codec,
-          Const.F32.codec,
-          Const.F64.codec,
-        )
+  val all: Seq[Instruction.Companion] =
+    (I32Ops.all ++
+      I64Ops.all ++
+      F32Ops.all ++
+      F64Ops.all
+      ).toSeq ++
+      Seq(
+        Unreachable,
+        Nop,
+        Block,
+        Loop,
+        If,
+        Else,
+        Br,
+        BrIf,
+        BrTable,
+        Return,
+        Call,
+        CallIndirect,
+        Drop,
+        End,
+        Select,
+        GetLocal,
+        SetLocal,
+        TeeLocal,
+        GetGlobal,
+        SetGlobal,
+        MemoryOperation.Load.F32None,
+        MemoryOperation.Load.F64None,
+        MemoryOperation.Load.I32Mem8SZ,
+        MemoryOperation.Load.I32Mem16SZ,
+        MemoryOperation.Load.I32None,
+        MemoryOperation.Load.I32Mem8ZX,
+        MemoryOperation.Load.I32Mem16ZX,
+        MemoryOperation.Load.I64Mem8SX,
+        MemoryOperation.Load.I64Mem8ZX,
+        MemoryOperation.Load.I64Mem16SX,
+        MemoryOperation.Load.I64Mem16ZX,
+        MemoryOperation.Load.I64Mem32SX,
+        MemoryOperation.Load.I64Mem32ZX,
+        MemoryOperation.Load.I64None,
+        MemoryOperation.Store.F32None,
+        MemoryOperation.Store.F64None,
+        MemoryOperation.Store.I32Mem8,
+        MemoryOperation.Store.I32Mem16,
+        MemoryOperation.Store.I32None,
+        MemoryOperation.Store.I64Mem8,
+        MemoryOperation.Store.I64Mem16,
+        MemoryOperation.Store.I64Mem32,
+        MemoryOperation.Store.I64None,
+        CurrentMemory,
+        GrowMemory,
+        Const.I32,
+        Const.I64,
+        Const.F32,
+        Const.F64,
+      )
 
-    codecs.choice(all.asInstanceOf[Seq[Codec[Instruction]]]: _*)
-  }
+  implicit val codec: Codec[Instruction] =
+    codecs.choice(all.map(_.codec): _*).asInstanceOf[Codec[Instruction]]
+
+  implicit val sCodec: Sexpr.Codec[Instruction] =
+    new Sexpr.Codec.Partial[Instruction] {
+      override val encoder: PartialFunction[Instruction, Sexpr] =
+        all.map(_.sCodec).foldLeft(PartialFunction.empty[Instruction, Sexpr]) {
+          case (accum, f) =>
+            accum.orElse(f.encoder).asInstanceOf[PartialFunction[Instruction, Sexpr]]
+        }
+
+      override val decoder: PartialFunction[Sexpr, Instruction] =
+        all.map(_.sCodec).foldLeft(PartialFunction.empty[Sexpr, Instruction]) {
+          case (accum, f) =>
+            accum.orElse(f.decoder)
+        }
+    }
 
   trait Companion {
-    type I
+    type I <: Instruction
 
     val Header: Byte
     lazy val headerCodec: Codec[Unit] = codecs.constant(BitVector(Header))
 
     val codec: Codec[I]
+
+    val SName: String
+
+    lazy val AsAtom: Sexpr = Sexpr.Atom(SName)
+
+    def sCodec: Sexpr.Codec.Partial[I]
   }
 
   trait Singleton extends Instruction with Companion {
     override type I = this.type
     override val codec: Codec[this.type] =
       headerCodec.xmap(Function.const(this), Function.const(()))
+
+    override lazy val sCodec: Sexpr.Codec.Partial[I] =
+      new Sexpr.Codec.Partial[I] {
+        override val encoder: PartialFunction[Singleton.this.type, Sexpr] = {
+          case (_: I) => AsAtom
+        }
+        override val decoder: PartialFunction[Sexpr, Singleton.this.type] = {
+          case Sexpr.Singleton(AsAtom) =>
+            Singleton.this
+        }
+      }
   }
 
   trait OnlyVar extends Companion {
@@ -98,17 +129,31 @@ object Instruction {
           case None => ???
         }
       )
+    override lazy val sCodec: Sexpr.Codec.Partial[I] =
+      new Sexpr.Codec.Partial[I] {
+        override val encoder: PartialFunction[I, Sexpr] =
+          (i: I) => unapply(i) match {
+            case Some(v) => Sexpr.Node(Vector(AsAtom, Sexpr.Utils.int32.encode(v)))
+            case None => ???
+          }
+        override val decoder: PartialFunction[Sexpr, I] = {
+          case Sexpr.Node(Vector(Sexpr.Singleton(AsAtom), Sexpr.Singleton(value))) =>
+            apply(Sexpr.Utils.int32.decode(value))
+        }
+      }
   }
 }
 
 case object Unreachable extends Instruction.Singleton {
   override type I = this.type
   override val Header: Byte = 0x00
+  override val SName: String = "unreachable"
 }
 
 case object Nop extends Instruction.Singleton {
   override type I = this.type
   override val Header: Byte = 0x01
+  override val SName: String = "nop"
 }
 
 case class Block(
@@ -120,10 +165,29 @@ object Block extends Instruction.Companion {
   override type I = Block
   override val Header: Byte = 0x02
   override val codec: Codec[Block] =
-    wcodecs.vec(ValueType.codec) ~ Instructions.thenEnd xmap(
+    StackType.codec ~ Instructions.thenEnd xmap(
       (Block.apply _).tupled,
       _.toTuple
     )
+
+  override val SName: String = "block"
+
+  override def sCodec: Sexpr.Codec.Partial[Block] =
+    new Sexpr.Codec.Partial[Block] {
+      override val encoder: PartialFunction[Block, Sexpr] = {
+        case Block(stackType, instructions) =>
+          Sexpr.Atom(SName) ++
+            Sexpr.Codec[StackType].encode(stackType) ++
+            Sexpr.Codec[Instructions].encode(instructions)
+      }
+
+      override val decoder: PartialFunction[Sexpr, Block] = {
+        case Sexpr.Cons(Sexpr.Atom(SName), Sexpr.Cons(encodedStackType, encodedInstructions)) =>
+          val stackType = Sexpr.Codec[StackType].decode(encodedStackType)
+          val instructions = Sexpr.Codec[Instructions].decode(encodedInstructions)
+          Block(stackType, instructions)
+      }
+    }
 }
 
 case class Loop(
@@ -135,7 +199,7 @@ object Loop extends Instruction.Companion {
   override type I = Loop
   override val Header: Byte = 0x03
   override val codec: Codec[Loop] =
-    wcodecs.vec(ValueType.codec) ~ Instructions.thenEnd xmap(
+    StackType.codec ~ Instructions.thenEnd xmap(
       (Loop.apply _).tupled,
       _.toTuple
     )
@@ -160,7 +224,7 @@ object If extends Instruction.Companion {
       Instructions.codec[Option[Else]]
     }
 
-    wcodecs.vec(ValueType.codec) ~ instructionsThenElse xmap(
+    StackType.codec ~ instructionsThenElse xmap(
       {
         case (stackType, (instructions, maybeElse)) =>
           If(stackType, instructions, maybeElse)
