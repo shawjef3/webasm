@@ -3,7 +3,7 @@ lazy val webasm =
     aggregate(ast, unsigned).
     settings(
       publish := false
-    ).settings(Common.settings)
+    )
 
 lazy val ast =
   project.in(file("ast")).

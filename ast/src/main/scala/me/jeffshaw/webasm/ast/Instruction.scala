@@ -1,6 +1,7 @@
 package me.jeffshaw.webasm.ast
 
 import me.jeffshaw.unsigned.UInt
+import scala.reflect.ClassTag
 import scodec._
 import scodec.codecs
 import scodec.bits.{BitVector, ByteVector}
@@ -64,64 +65,89 @@ object Instruction {
         Const.I32,
         Const.I64,
         Const.F32,
-        Const.F64,
+        Const.F64
       )
 
   implicit val codec: Codec[Instruction] =
     codecs.choice(all.map(_.codec): _*).asInstanceOf[Codec[Instruction]]
 
-  implicit val sCodec: Sexpr.Codec[Instruction] =
+  implicit val sCodec: Sexpr.Codec[Instruction] = {
+    val sExprCodecs: Seq[Sexpr.Codec.Partial[Instruction]] =
+      all.collect {
+        case s: IsSexpr =>
+          s.sCodec.asInstanceOf[Sexpr.Codec.Partial[Instruction]]
+      }
+
     new Sexpr.Codec.Partial[Instruction] {
       override val encoder: PartialFunction[Instruction, Sexpr] =
-        all.map(_.sCodec).foldLeft(PartialFunction.empty[Instruction, Sexpr]) {
+        sExprCodecs.foldLeft(PartialFunction.empty[Instruction, Sexpr]) {
           case (accum, f) =>
-            accum.orElse(f.encoder).asInstanceOf[PartialFunction[Instruction, Sexpr]]
+            accum.orElse(f.encoder)
         }
 
       override val decoder: PartialFunction[Sexpr, Instruction] =
-        all.map(_.sCodec).foldLeft(PartialFunction.empty[Sexpr, Instruction]) {
+        sExprCodecs.foldLeft(PartialFunction.empty[Sexpr, Instruction]) {
           case (accum, f) =>
             accum.orElse(f.decoder)
         }
     }
+  }
 
   trait Companion {
     type I <: Instruction
 
     val Header: Byte
-    lazy val headerCodec: Codec[Unit] = codecs.constant(BitVector(Header))
+    val headerCodec: Codec[Unit] = codecs.constant(BitVector(Header))
 
-    val codec: Codec[I]
+    implicit val codec: Codec[I]
+  }
 
+  trait IsSexpr {
+    self: Companion =>
+    implicit val sCodec: Sexpr.Codec.Partial[I]
+  }
+
+  /**
+    * The atom is the same each time.
+    */
+  trait IsSexprFull extends IsSexpr {
+    self: Companion =>
     val SName: String
 
-    lazy val AsAtom: Sexpr = Sexpr.Atom(SName)
-
-    def sCodec: Sexpr.Codec.Partial[I]
+    val AsAtom: Sexpr = Sexpr.Atom(SName)
   }
 
   trait Singleton extends Instruction with Companion {
     override type I = this.type
-    override val codec: Codec[this.type] =
+    override implicit val codec: Codec[this.type] =
       headerCodec.xmap(Function.const(this), Function.const(()))
-
-    override lazy val sCodec: Sexpr.Codec.Partial[I] =
-      new Sexpr.Codec.Partial[I] {
-        override val encoder: PartialFunction[Singleton.this.type, Sexpr] = {
-          case (_: I) => AsAtom
-        }
-        override val decoder: PartialFunction[Sexpr, Singleton.this.type] = {
-          case Sexpr.Singleton(AsAtom) =>
-            Singleton.this
-        }
-      }
   }
 
-  trait OnlyVar extends Companion {
+  object Singleton {
+    trait IsSexpr extends Singleton with Instruction.IsSexprFull {
+      override implicit val sCodec: Sexpr.Codec.Partial[I] =
+        new Sexpr.Codec.Partial[I] {
+          override val encoder: PartialFunction[IsSexpr.this.type, Sexpr] = {
+            case _: I => AsAtom
+          }
+          override val decoder: PartialFunction[Sexpr, IsSexpr.this.type] = {
+            case Sexpr.Singleton(AsAtom) =>
+              IsSexpr.this
+          }
+        }
+    }
+  }
+
+  trait OnlyVar extends Companion with IsSexprFull {
     def apply(value: Var): I
     def unapply(i: I): Option[Var]
 
-    override val codec: Codec[I] =
+    object This {
+      def unapply(i: I): Option[Var] =
+        OnlyVar.this.unapply(i)
+    }
+
+    override implicit val codec: Codec[I] =
       headerCodec ~ wcodecs.vu32 xmap(
         x => apply(x._2),
         i => unapply(i) match {
@@ -129,31 +155,32 @@ object Instruction {
           case None => ???
         }
       )
-    override lazy val sCodec: Sexpr.Codec.Partial[I] =
+    override val sCodec: Sexpr.Codec.Partial[I] =
       new Sexpr.Codec.Partial[I] {
-        override val encoder: PartialFunction[I, Sexpr] =
-          (i: I) => unapply(i) match {
-            case Some(v) => Sexpr.Node(Vector(AsAtom, Sexpr.Utils.int32.encode(v)))
-            case None => ???
-          }
+        override val encoder: PartialFunction[I, Sexpr] = {
+          case This(v) =>
+            AsAtom ++ Sexpr.Utils.int32.encode(v)
+        }
         override val decoder: PartialFunction[Sexpr, I] = {
-          case Sexpr.Node(Vector(Sexpr.Singleton(AsAtom), Sexpr.Singleton(value))) =>
+          case Sexpr.Cons(Sexpr.Singleton(AsAtom), value: Sexpr.Atom) =>
             apply(Sexpr.Utils.int32.decode(value))
         }
       }
   }
 }
 
-case object Unreachable extends Instruction.Singleton {
-  override type I = this.type
+case object Unreachable extends {
   override val Header: Byte = 0x00
   override val SName: String = "unreachable"
+} with Instruction.Singleton with Instruction.Singleton.IsSexpr {
+  override type I = this.type
 }
 
-case object Nop extends Instruction.Singleton {
-  override type I = this.type
+case object Nop extends {
   override val Header: Byte = 0x01
   override val SName: String = "nop"
+} with Instruction.Singleton with Instruction.Singleton.IsSexpr {
+  override type I = this.type
 }
 
 case class Block(
@@ -161,18 +188,18 @@ case class Block(
   instructions: Instructions
 ) extends Instruction
 
-object Block extends Instruction.Companion {
-  override type I = Block
+object Block extends {
+  override val SName: String = "block"
   override val Header: Byte = 0x02
-  override val codec: Codec[Block] =
+} with Instruction.Companion with Instruction.IsSexprFull {
+  override type I = Block
+  override implicit val codec: Codec[Block] =
     StackType.codec ~ Instructions.thenEnd xmap(
       (Block.apply _).tupled,
       _.toTuple
     )
 
-  override val SName: String = "block"
-
-  override def sCodec: Sexpr.Codec.Partial[Block] =
+  override implicit val sCodec: Sexpr.Codec.Partial[Block] =
     new Sexpr.Codec.Partial[Block] {
       override val encoder: PartialFunction[Block, Sexpr] = {
         case Block(stackType, instructions) =>
@@ -182,9 +209,9 @@ object Block extends Instruction.Companion {
       }
 
       override val decoder: PartialFunction[Sexpr, Block] = {
-        case Sexpr.Cons(Sexpr.Atom(SName), Sexpr.Cons(encodedStackType, encodedInstructions)) =>
+        case Sexpr.Node(Sexpr.Singleton(Sexpr.Atom(SName)) +: Sexpr.Singleton(encodedStackType) +: encodedInstructions) =>
           val stackType = Sexpr.Codec[StackType].decode(encodedStackType)
-          val instructions = Sexpr.Codec[Instructions].decode(encodedInstructions)
+          val instructions = Sexpr.Codec[Instructions].decode(Sexpr.Node(encodedInstructions))
           Block(stackType, instructions)
       }
     }
@@ -195,14 +222,33 @@ case class Loop(
   instructions: Instructions
 ) extends Instruction
 
-object Loop extends Instruction.Companion {
-  override type I = Loop
+object Loop extends {
+  override val SName: String = "loop"
   override val Header: Byte = 0x03
-  override val codec: Codec[Loop] =
+} with Instruction.Companion with Instruction.IsSexprFull {
+  override type I = Loop
+  override implicit val codec: Codec[Loop] =
     StackType.codec ~ Instructions.thenEnd xmap(
       (Loop.apply _).tupled,
       _.toTuple
     )
+
+  override implicit val sCodec: Sexpr.Codec.Partial[Loop] =
+    new Sexpr.Codec.Partial[Loop] {
+      override val encoder: PartialFunction[Loop, Sexpr] = {
+        case Loop(stackType, instructions) =>
+          Sexpr.Atom(SName) ++
+            Sexpr.Codec[StackType].encode(stackType) ++
+            Sexpr.Codec[Instructions].encode(instructions)
+      }
+
+      override val decoder: PartialFunction[Sexpr, Loop] = {
+        case Sexpr.Node(Sexpr.Singleton(Sexpr.Atom(SName)) +: Sexpr.Singleton(encodedStackType) +: encodedInstructions) =>
+          val stackType = Sexpr.Codec[StackType].decode(encodedStackType)
+          val instructions = Sexpr.Codec[Instructions].decode(Sexpr.Node(encodedInstructions))
+          Loop(stackType, instructions)
+      }
+    }
 }
 
 case class If(
@@ -211,58 +257,101 @@ case class If(
   `else`: Option[Else]
 ) extends Instruction
 
-object If extends Instruction.Companion {
-  override type I = If
+object If extends {
+  override val SName: String = "if"
   override val Header: Byte = 0x04
-  override val codec: Codec[If] = {
-    val instructionsThenElse = {
-      implicit val innerCodec: Codec[Option[Else]] =
-        codecs.fallback(End.codec, Else.codec) xmap(
-          _.toOption,
-          _.toRight(End)
-        )
-      Instructions.codec[Option[Else]]
-    }
+} with Instruction.Companion with Instruction.IsSexprFull {
+  override type I = If
+  override implicit val codec: Codec[If] = {
+    val elseOrEnd: Codec[Option[Else]] =
+      codecs.fallback(End.codec, Else.codec) xmap(
+        _.right.toOption,
+        Function.const(Left(End))
+      )
 
-    StackType.codec ~ instructionsThenElse xmap(
+    Codec[StackType] ~ Instructions.thenNothing ~ elseOrEnd xmap(
       {
-        case (stackType, (instructions, maybeElse)) =>
+        case ((stackType, instructions), maybeElse) =>
           If(stackType, instructions, maybeElse)
       },
       {
         case If(stackType, instructions, e) =>
-          (stackType, (instructions, e))
+          ((stackType, instructions), e)
       }
     )
-
   }
 
+  override implicit val sCodec: Sexpr.Codec.Partial[If] =
+    new Sexpr.Codec.Partial[If] {
+      override val encoder: PartialFunction[If, Sexpr] = {
+        case If(stackType, instructions, maybeElse) =>
+          AsAtom ++
+            Sexpr.Codec[StackType].encode(stackType) ++
+            Sexpr.Node(Sexpr.Node(Sexpr.Atom("then") ++ Sexpr.Codec[Instructions].encode(instructions))) ++
+          Sexpr.Node(Sexpr.Codec[Else].encode(maybeElse.getOrElse(Else.empty)))
+      }
+      override val decoder: PartialFunction[Sexpr, If] = {
+        case Sexpr.Node(Vector(Sexpr.Singleton(AsAtom), stackTypeSexpr, Sexpr.Node(Sexpr.Atom("then") +: instructionsSexpr), elseSexpr@Sexpr.Node(Else.AsAtom +: _))) =>
+          val stackType = Sexpr.Codec[StackType].decode(stackTypeSexpr)
+          val instructions = Sexpr.Codec[Instructions].decode(Sexpr.Node(instructionsSexpr))
+          val decodedElse = Sexpr.Codec[Else].decode(elseSexpr)
+          val `else` =
+            if (decodedElse.isEmpty)
+              None
+            else Some(decodedElse)
+          If(stackType, instructions, `else`)
+      }
+    }
 }
 
-case class Else(instructions: Instructions) extends Instruction
+case class Else(instructions: Instructions) extends Instruction {
+  def isEmpty: Boolean = instructions.instructions.isEmpty
+}
 
-object Else extends Instruction.Companion {
-  override type I = Else
+object Else extends {
   override val Header: Byte = 0x05
-  override val codec: Codec[Else] =
+  override val SName: String = "else"
+} with Instruction.Companion with Instruction.IsSexprFull {
+  override type I = Else
+  override implicit val codec: Codec[Else] =
     Instructions.thenEnd xmap(
       Else(_),
       _.instructions
     )
+
+  override implicit val sCodec: Sexpr.Codec.Partial[Else] =
+    new Sexpr.Codec.Partial[Else] {
+      override val encoder: PartialFunction[Else, Sexpr] = {
+        case e: Else =>
+          AsAtom ++ Sexpr.Codec[Instructions].encode(e.instructions)
+      }
+      override val decoder: PartialFunction[Sexpr, Else] = {
+        case Sexpr.Cons(AsAtom, instructionsSexpr) =>
+          val instructions = Sexpr.Codec[Instructions].decode(instructionsSexpr)
+          Else(instructions)
+      }
+    }
+
+  val empty = Else(Instructions.empty)
+
 }
 
 case class Br(label: Var) extends Instruction
 
-object Br extends Instruction.OnlyVar {
-  override type I = Br
+object Br extends {
+  override val SName: String = "br"
   override val Header: Byte = 0x0c
+} with Instruction.OnlyVar with Instruction.IsSexprFull {
+  override type I = Br
 }
 
 case class BrIf(label: Var) extends Instruction
 
-object BrIf extends Instruction.OnlyVar {
-  override type I = BrIf
+object BrIf extends {
+  override val SName: String = "br_if"
   override val Header: Byte = 0x0d
+} with Instruction.OnlyVar with Instruction.IsSexprFull {
+  override type I = BrIf
 }
 
 case class BrTable(
@@ -270,10 +359,12 @@ case class BrTable(
   condition: Var
 ) extends Instruction
 
-object BrTable extends Instruction.Companion {
-  override type I = BrTable
+object BrTable extends {
+  override val SName: String = "br_table"
   override val Header: Byte = 0x0e
-  override val codec: Codec[BrTable] =
+} with Instruction.Companion with Instruction.IsSexprFull  {
+  override type I = BrTable
+  override implicit val codec: Codec[BrTable] =
     headerCodec ~ wcodecs.vec(wcodecs.vu32) ~ wcodecs.vu32 xmap(
       x => BrTable(x._1._2, x._2),
       i => unapply(i) match {
@@ -281,25 +372,43 @@ object BrTable extends Instruction.Companion {
         case None => ???
       }
     )
+  override implicit val sCodec: Sexpr.Codec.Partial[BrTable] =
+    new Sexpr.Codec.Partial[BrTable] {
+      override val encoder: PartialFunction[BrTable, Sexpr] = {
+        case BrTable(table, condition) =>
+          Sexpr.Node(AsAtom +: (table :+ condition).map(Sexpr.Utils.int32.encode))
+      }
+      override val decoder: PartialFunction[Sexpr, BrTable] = {
+        case Sexpr.Cons(AsAtom, Sexpr.Node(tableSexpr :+ conditionSexpr)) =>
+          val table = tableSexpr.map(Sexpr.Utils.int32.decode)
+          val condition = Sexpr.Utils.int32.decode(conditionSexpr)
+          BrTable(table, condition)
+      }
+    }
 }
 
-case object Return extends Instruction.Singleton {
+case object Return extends {
+  override val SName: String = "return"
   override val Header: Byte = 0x0f
-}
+} with Instruction.Singleton.IsSexpr
 
 case class Call(label: Var) extends Instruction
 
-object Call extends Instruction.OnlyVar {
-  override type I = Call
+object Call extends {
+  override val SName: String = "call"
   override val Header: Byte = 0x10
+} with Instruction.OnlyVar {
+  override type I = Call
 }
 
 case class CallIndirect(label: Var) extends Instruction
 
-object CallIndirect extends Instruction.Companion {
-  override type I = CallIndirect
+object CallIndirect extends {
+  override val SName: String = "call_indirect"
   override val Header: Byte = 0x11
-  override val codec: Codec[I] =
+} with Instruction.OnlyVar {
+  override type I = CallIndirect
+  override implicit val codec: Codec[I] =
     headerCodec ~ wcodecs.vu32 ~ wcodecs.u8Const(0x00) xmap(
       x => apply(x._1._2),
       i => unapply(i) match {
@@ -309,245 +418,545 @@ object CallIndirect extends Instruction.Companion {
     )
 }
 
-case object Drop extends Instruction.Singleton {
+case object Drop extends {
+  override val SName: String = "drop"
   override val Header: Byte = 0x1a
-}
+} with Instruction.Singleton.IsSexpr
 
-case object End extends Instruction.Singleton {
+case object End extends {
   override val Header: Byte = 0x0b
-}
+  override val SName: String = ???
+} with Instruction.Singleton.IsSexpr
 
-case object Select extends Instruction.Singleton {
+case object Select extends {
   override val Header: Byte = 0x1b
-}
+  override val SName: String = "select"
+} with Instruction.Singleton.IsSexpr
 
 case class GetLocal(label: Var) extends Instruction
 
-object GetLocal extends Instruction.OnlyVar {
-  override type I = GetLocal
+object GetLocal extends {
   override val Header: Byte = 0x20
+  override val SName: String = "get_local"
+} with Instruction.OnlyVar {
+  override type I = GetLocal
 }
 
 case class SetLocal(label: Var) extends Instruction
 
-object SetLocal extends Instruction.OnlyVar {
-  override type I = SetLocal
+object SetLocal extends {
   override val Header: Byte = 0x21
+  override val SName: String = "set_local"
+} with Instruction.OnlyVar {
+  override type I = SetLocal
 }
 
 case class TeeLocal(label: Var) extends Instruction
 
-object TeeLocal extends Instruction.OnlyVar {
-  override type I = TeeLocal
+object TeeLocal extends {
   override val Header: Byte = 0x21
+  override val SName: String = "TeeLocal"
+} with Instruction.OnlyVar {
+  override type I = TeeLocal
 }
 
 case class GetGlobal(label: Var) extends Instruction
 
-object GetGlobal extends Instruction.OnlyVar {
-  override type I = GetGlobal
+object GetGlobal extends {
   override val Header: Byte = 0x23
+  override val SName: String = "get_global"
+} with Instruction.OnlyVar {
+  override type I = GetGlobal
 }
 
 case class SetGlobal(label: Var) extends Instruction
 
-object SetGlobal extends Instruction.OnlyVar {
-  override type I = SetGlobal
+object SetGlobal extends {
   override val Header: Byte = 0x24
+  override val SName: String = "set_global"
+} with Instruction.OnlyVar {
+  override type I = SetGlobal
 }
 
-sealed trait MemSize
+sealed trait MemSize extends Sexpr.Part
 
 object MemSize {
-  case object `8` extends MemSize
-  case object `16` extends MemSize
-  case object `32` extends MemSize
+  case object `8` extends MemSize {
+    override val sExprPart: String = "8"
+  }
+  case object `16` extends MemSize {
+    override val sExprPart: String = "16"
+  }
+  case object `32` extends MemSize {
+    override val sExprPart: String = "32"
+  }
 }
 
-trait MemoryOperation[Self <: MemoryOperation[Self, Size], Size] extends Instruction {
+trait MemoryOperation[Size] extends Instruction {
   val memoryType: ValueType
-  val align: UInt
+  val align: Int
   val offset: UInt
   val size: Option[Size]
 }
 
-object MemoryOperation  {
+object MemoryOperation {
 
-  trait M[Size] extends Instruction.Singleton {
-    self =>
-    val memoryType: ValueType
-    val size: Option[Size]
-  }
-
-  type Load = M[Load.Size]
-
-  object Load {
-    case class Size(size: MemSize, extension: Extension)
-
-    sealed trait Extension
-
-    case object Extension {
-      case object SX extends Extension
-      case object ZX extends Extension
+  object Offset {
+    def apply(offset: UInt): Sexpr = {
+      if (offset == UInt.MinValue)
+        Sexpr.Node.empty
+      else Sexpr.Atom("offset=0x" + offset.toString(16))
     }
 
-    object I32None extends Load {
+    val matcher = "offset=(\\d+)".r
+
+    def unapply(offsetString: String): Option[UInt] = {
+      val radix =
+        if (offsetString.startsWith("0x"))
+          16
+        else 10
+      Some(UInt.valueOf(offsetString, radix))
+    }
+  }
+
+  object Align {
+    def apply(align: Int, valueType: ValueType): Sexpr = {
+      Sexpr.Atom("align=" + PowerOf2(align, valueType))
+    }
+
+    def unapply(s: String): Option[Int] = {
+      PowerOf2.unapply(s)
+    }
+
+    object PowerOf2 {
+      def apply(align: Int, valueType: ValueType): String = {
+        val shifted = 1 << align
+        "align=" + shifted
+      }
+
+      def unapply(alignString: String): Option[Int] = {
+        val asInt = alignString.toInt
+        if (isPowerOfTwo(asInt)) {
+          Some(log2(asInt))
+        } else None
+      }
+
+      def isPowerOfTwo(n: Int): Boolean = {
+        n > 0 && (n & (n - 1)) == 0
+      }
+
+      //https://graphics.stanford.edu/~seander/bithacks.html
+      private val logTable256 = {
+        val a = Array.fill(256)(0)
+        for (i <- 2 until 256) {
+          a(i) = 1 + a(i / 2)
+        }
+        a(0) = -1
+        a
+      }
+
+      def log2(v: Int): Int = {
+        var t = 0
+        var tt = 0
+        if ({tt = v >> 16; tt != 0}) {
+          t = tt >> 8
+          if (t == 0) {
+            16 + logTable256(tt)
+          } else 24 + logTable256(t)
+        } else {
+          t = v >> 8
+          if (t == 0) {
+            logTable256(v)
+          } else 8 + logTable256(t)
+        }
+      }
+    }
+  }
+
+  trait Companion[Self <: MemoryOperation[Size], Size] extends Instruction.Companion with Instruction.IsSexprFull {
+    self =>
+    def apply(align: Int, offset: UInt): Self
+    def unapply(value: Self): Option[(Int, UInt)]
+
+    override type I = Self
+
+    val memoryType: ValueType
+    val size: Option[Size]
+
+    override implicit val codec: Codec[Self] = ???
+
+    implicit val selfTag: ClassTag[Self]
+
+    override val sCodec: Sexpr.Codec.Partial[Self] =
+      new Sexpr.Codec.Partial[Self] {
+        override val encoder: PartialFunction[Self, Sexpr] = {
+          case value: Self =>
+            val offset = Offset(value.offset)
+            val align = Align(value.align, value.memoryType)
+            Sexpr.Node(AsAtom ++ offset ++ align)
+        }
+
+        override val decoder: PartialFunction[Sexpr, Self] = {
+          case Sexpr.Node(AsAtom +: tail) =>
+            // From offset_opt and align_opt rules
+            val map = Companion.eqMap(tail)
+            (map.getOrElse("align", memoryType.size.toString), map.getOrElse("offset", "0")) match {
+              case (Align(align), Offset(offset)) =>
+                apply(align, offset)
+              case _ =>
+                throw new IllegalArgumentException()
+            }
+        }
+      }
+  }
+
+  object Companion {
+    def eqMap(ss: Vector[Sexpr]): Map[String, String] = {
+      ss.collect {
+        case Sexpr.Singleton(Sexpr.Atom(value)) if value.contains('=') =>
+          val split = value.split("=", 2)
+          split(0).trim -> split(1).trim
+      }
+    }.toMap
+  }
+
+  abstract class Load[Self <: Load[Self]](companion: Load.Companion[Self]) extends MemoryOperation[Load.Size] {
+    override val memoryType: ValueType = companion.memoryType
+    override val size: Option[Load.Size] = companion.size
+  }
+
+  object Load {
+    abstract class Companion[Self <: Load[Self]] extends MemoryOperation.Companion[Self, Size] {
+      override val SName: String = {
+        val name =
+          "load" + {
+            for (Load.Size(size, extension) <- size) yield {
+              size.sExprPart + extension.sExprPart
+            }
+          }.getOrElse("")
+
+        memoryType.sExprPart + "." + name
+      }
+    }
+
+    case class Size(size: MemSize, extension: Extension)
+
+    sealed trait Extension extends Sexpr.Part
+
+    case object Extension {
+      case object SX extends Extension {
+        override val sExprPart: String = "_s"
+      }
+      case object ZX extends Extension {
+        override val sExprPart: String = "_u"
+      }
+    }
+
+    case class I32None(
+      override val align: Int,
+      override val offset: UInt
+    ) extends Load[I32None](I32None)
+
+    object I32None extends {
       override val Header: Byte = 0x28
       override val memoryType: ValueType = ValueType.I32
       override val size: Option[Size] = None
-    }
+      implicit val selfTag: ClassTag[I32None] = ClassTag(classOf[I32None])
+    } with Companion[I32None]
 
-    object I64None extends Load {
+    case class I64None(
+      override val align: Int,
+      override val offset: UInt
+    ) extends Load[I64None](I64None)
+
+    object I64None extends {
       override val Header: Byte = 0x29
       override val memoryType: ValueType = ValueType.I64
       override val size: Option[Size] = None
-    }
+      implicit val selfTag: ClassTag[I64None] = ClassTag(classOf[I64None])
+    } with Companion[I64None]
 
-    object F32None extends Load {
+    case class F32None(
+      override val align: Int,
+      override val offset: UInt
+    ) extends Load[F32None](F32None)
+
+    object F32None extends {
       override val Header: Byte = 0x2a
       override val memoryType: ValueType = ValueType.F32
       override val size: Option[Size] = None
-    }
+      override implicit val selfTag: ClassTag[F32None] = ClassTag(classOf[F32None])
+    } with Companion[F32None]
 
-    object F64None extends Load {
+    case class F64None(
+      override val align: Int,
+      override val offset: UInt
+    ) extends Load[F64None](F64None)
+
+    object F64None extends {
       override val Header: Byte = 0x2b
       override val memoryType: ValueType = ValueType.F64
       override val size: Option[Size] = None
-    }
+      override implicit val selfTag: ClassTag[F64None] = ClassTag(classOf[F64None])
+    } with Companion[F64None]
 
-    object I32Mem8SZ extends Load {
+    case class I32Mem8SZ(
+      override val align: Int,
+      override val offset: UInt
+    ) extends Load[I32Mem8SZ](I32Mem8SZ)
+
+    object I32Mem8SZ extends {
       override val Header: Byte = 0x2c
       override val memoryType: ValueType = ValueType.I32
       override val size: Option[Size] = Some(Size(MemSize.`8`, Extension.SX))
-    }
+      override implicit val selfTag: ClassTag[I32Mem8SZ] = ClassTag(classOf[I32Mem8SZ])
+    } with Companion[I32Mem8SZ]
 
-    object I32Mem8ZX extends Load {
+    case class I32Mem8ZX(
+      override val align: Int,
+      override val offset: UInt
+    ) extends Load[I32Mem8ZX](I32Mem8ZX)
+
+    object I32Mem8ZX extends {
       override val Header: Byte = 0x2d
       override val memoryType: ValueType = ValueType.I32
       override val size: Option[Size] = Some(Size(MemSize.`8`, Extension.ZX))
-    }
+      override implicit val selfTag: ClassTag[I32Mem8ZX] = ClassTag(classOf[I32Mem8ZX])
+    } with Companion[I32Mem8ZX]
 
-    object I32Mem16SZ extends Load {
+    case class I32Mem16SZ(
+      override val align: Int,
+      override val offset: UInt
+    ) extends Load[I32Mem16SZ](I32Mem16SZ)
+
+    object I32Mem16SZ extends {
       override val Header: Byte = 0x2e
       override val memoryType: ValueType = ValueType.I32
       override val size: Option[Size] = Some(Size(MemSize.`16`, Extension.SX))
-    }
+      override implicit val selfTag: ClassTag[I32Mem16SZ] = ClassTag(classOf[I32Mem16SZ])
+    } with Companion[I32Mem16SZ]
 
-    object I32Mem16ZX extends Load {
+    case class I32Mem16ZX(
+      override val align: Int,
+      override val offset: UInt
+    ) extends Load[I32Mem16ZX](I32Mem16ZX)
+
+    object I32Mem16ZX extends {
       override val Header: Byte = 0x2f
       override val memoryType: ValueType = ValueType.I32
       override val size: Option[Size] = Some(Size(MemSize.`16`, Extension.ZX))
-    }
+      override implicit val selfTag: ClassTag[I32Mem16ZX] = ClassTag(classOf[I32Mem16ZX])
+    } with Companion[I32Mem16ZX]
 
-    object I64Mem8SX extends Load {
+    case class I64Mem8SX(
+      override val align: Int,
+      override val offset: UInt
+    ) extends Load[I64Mem8SX](I64Mem8SX)
+
+    object I64Mem8SX extends {
       override val Header: Byte = 0x30
       override val memoryType: ValueType = ValueType.I64
       override val size: Option[Size] = Some(Size(MemSize.`8`, Extension.SX))
-    }
+      override implicit val selfTag: ClassTag[I64Mem8SX] = ClassTag(classOf[I64Mem8SX])
+    } with Companion[I64Mem8SX]
 
-    object I64Mem8ZX extends Load {
+    case class I64Mem8ZX(
+      override val align: Int,
+      override val offset: UInt
+    ) extends Load[I64Mem8ZX](I64Mem8ZX)
+
+    object I64Mem8ZX extends {
       override val Header: Byte = 0x31
       override val memoryType: ValueType = ValueType.I64
       override val size: Option[Size] = Some(Size(MemSize.`8`, Extension.ZX))
-    }
+      override implicit val selfTag: ClassTag[I64Mem8ZX] = ClassTag(classOf[I64Mem8ZX])
+    } with Companion[I64Mem8ZX]
 
-    object I64Mem16SX extends Load {
+    case class I64Mem16SX(
+      override val align: Int,
+      override val offset: UInt
+    ) extends Load[I64Mem16SX](I64Mem16SX)
+
+    object I64Mem16SX extends {
       override val Header: Byte = 0x32
       override val memoryType: ValueType = ValueType.I64
       override val size: Option[Size] = Some(Size(MemSize.`16`, Extension.SX))
-    }
+      override implicit val selfTag: ClassTag[I64Mem16SX] = ClassTag(classOf[I64Mem16SX])
+    } with Companion[I64Mem16SX]
 
-    object I64Mem16ZX extends Load {
+    case class I64Mem16ZX(
+      override val align: Int,
+      override val offset: UInt
+    ) extends Load[I64Mem16ZX](I64Mem16ZX)
+
+    object I64Mem16ZX extends {
       override val Header: Byte = 0x33
       override val memoryType: ValueType = ValueType.I64
       override val size: Option[Size] = Some(Size(MemSize.`16`, Extension.ZX))
-    }
+      override implicit val selfTag: ClassTag[I64Mem16ZX] = ClassTag(classOf[I64Mem16ZX])
+    } with Companion[I64Mem16ZX]
 
-    object I64Mem32SX extends Load {
+    case class I64Mem32SX(
+      override val align: Int,
+      override val offset: UInt
+    ) extends Load[I64Mem32SX](I64Mem32SX)
+
+    object I64Mem32SX extends {
       override val Header: Byte = 0x34
       override val memoryType: ValueType = ValueType.I64
       override val size: Option[Size] = Some(Size(MemSize.`32`, Extension.SX))
-    }
+      override implicit val selfTag: ClassTag[I64Mem32SX] = ClassTag(classOf[I64Mem32SX])
+    } with Companion[I64Mem32SX]
 
-    object I64Mem32ZX extends Load {
+    case class I64Mem32ZX(
+      override val align: Int,
+      override val offset: UInt
+    ) extends Load[I64Mem32ZX](I64Mem32ZX)
+
+    object I64Mem32ZX extends {
       override val Header: Byte = 0x35
       override val memoryType: ValueType = ValueType.I64
       override val size: Option[Size] = Some(Size(MemSize.`32`, Extension.ZX))
-    }
+      override implicit val selfTag: ClassTag[I64Mem32ZX] = ClassTag(classOf[I64Mem32ZX])
+    } with Companion[I64Mem32ZX]
 
   }
 
-  type Store = M[MemSize]
+  abstract class Store[Self <: Store[Self]](companion: Store.Companion[Self]) extends MemoryOperation[MemSize] {
+    override val memoryType: ValueType = companion.memoryType
+    override val size: Option[MemSize] = companion.size
+  }
 
   object Store {
 
-    object I32None extends Store {
+    abstract class Companion[Self <: Store[Self]] extends MemoryOperation.Companion[Self, MemSize] {
+      override val SName: String = {
+        memoryType.sExprPart + "." + "store" +
+          size.map(_.sExprPart).getOrElse("")
+      }
+    }
+
+    case class I32None(
+      override val align: Int,
+      override val offset: UInt
+    ) extends Store[I32None](I32None)
+
+    object I32None extends {
       override val Header: Byte = 0x36
       override val memoryType: ValueType = ValueType.I32
       override val size: Option[MemSize] = None
-    }
+      override implicit val selfTag: ClassTag[I32None] = ClassTag(classOf[I32None])
+    } with Companion[I32None]
 
-    object I64None extends Store {
+    case class I64None(
+      override val align: Int,
+      override val offset: UInt
+    ) extends Store[I64None](I64None)
+
+    object I64None extends {
       override val Header: Byte = 0x37
       override val memoryType: ValueType = ValueType.I64
       override val size: Option[MemSize] = None
-    }
+      override implicit val selfTag: ClassTag[I64None] = ClassTag(classOf[I64None])
+    } with Companion[I64None]
 
-    object F32None extends Store {
+    case class F32None(
+      override val align: Int,
+      override val offset: UInt
+    ) extends Store[F32None](F32None)
+
+    object F32None extends {
       override val Header: Byte = 0x38
       override val memoryType: ValueType = ValueType.F32
       override val size: Option[MemSize] = None
-    }
+      override implicit val selfTag: ClassTag[F32None] = ClassTag(classOf[F32None])
+    } with Companion[F32None]
 
-    object F64None extends Store {
+    case class F64None(
+      override val align: Int,
+      override val offset: UInt
+    ) extends Store[F64None](F64None)
+
+    object F64None extends {
       override val Header: Byte = 0x39
       override val memoryType: ValueType = ValueType.F64
       override val size: Option[MemSize] = None
-    }
+      override implicit val selfTag: ClassTag[F64None] = ClassTag(classOf[F64None])
+    } with Companion[F64None]
 
-    object I32Mem8 extends Store {
+    case class I32Mem8(
+      override val align: Int,
+      override val offset: UInt
+    ) extends Store[I32Mem8](I32Mem8)
+
+    object I32Mem8 extends {
       override val Header: Byte = 0x3a
       override val memoryType: ValueType = ValueType.I32
       override val size: Option[MemSize] = Some(MemSize.`8`)
-    }
+      override implicit val selfTag: ClassTag[I32Mem8] = ClassTag(classOf[I32Mem8])
+    } with Companion[I32Mem8]
 
-    object I32Mem16 extends Store {
+    case class I32Mem16(
+      override val align: Int,
+      override val offset: UInt
+    ) extends Store[I32Mem16](I32Mem16)
+
+    object I32Mem16 extends {
       override val Header: Byte = 0x3b
       override val memoryType: ValueType = ValueType.I32
       override val size: Option[MemSize] = Some(MemSize.`16`)
-    }
+      override implicit val selfTag: ClassTag[I32Mem16] = ClassTag(classOf[I32Mem16])
+    } with Companion[I32Mem16]
 
-    object I64Mem8 extends Store {
+    case class I64Mem8(
+      override val align: Int,
+      override val offset: UInt
+    ) extends Store[I64Mem8](I64Mem8)
+
+    object I64Mem8 extends {
       override val Header: Byte = 0x3c
       override val memoryType: ValueType = ValueType.I64
       override val size: Option[MemSize] = Some(MemSize.`8`)
-    }
+      override implicit val selfTag: ClassTag[I64Mem8] = ClassTag(classOf[I64Mem8])
+    } with Companion[I64Mem8]
 
-    object I64Mem16 extends Store {
+    case class I64Mem16(
+      override val align: Int,
+      override val offset: UInt
+    ) extends Store[I64Mem16](I64Mem16)
+
+    object I64Mem16 extends {
       override val Header: Byte = 0x3d
       override val memoryType: ValueType = ValueType.I64
       override val size: Option[MemSize] = Some(MemSize.`16`)
-    }
+      override implicit val selfTag: ClassTag[I64Mem16] = ClassTag(classOf[I64Mem16])
+    } with Companion[I64Mem16]
 
-    object I64Mem32 extends Store {
+    case class I64Mem32(
+      override val align: Int,
+      override val offset: UInt
+    ) extends Store[I64Mem32](I64Mem32)
+
+    object I64Mem32 extends {
       override val Header: Byte = 0x3e
       override val memoryType: ValueType = ValueType.I64
       override val size: Option[MemSize] = Some(MemSize.`32`)
-    }
+      override implicit val selfTag: ClassTag[I64Mem32] = ClassTag(classOf[I64Mem32])
+    } with Companion[I64Mem32]
 
   }
 
 }
 
-case object CurrentMemory extends Instruction.Singleton {
+case object CurrentMemory extends {
   override val Header: Byte = 0x3f
-  override lazy val headerCodec: Codec[Unit] = codecs.constant(ByteVector(Header, 0x00))
-}
+  override val headerCodec: Codec[Unit] = codecs.constant(ByteVector(Header, 0x00))
+} with Instruction.Singleton
 
-case object GrowMemory extends Instruction.Singleton {
+case object GrowMemory extends {
   override val Header: Byte = 0x40
-  override lazy val headerCodec: Codec[Unit] = codecs.constant(ByteVector(Header, 0x00))
-}
+  override val headerCodec: Codec[Unit] = codecs.constant(ByteVector(Header, 0x00))
+} with Instruction.Singleton
 
 trait Const[A] extends Instruction {
   val value: A
@@ -560,7 +969,7 @@ object Const {
   object I32 extends Instruction.Companion {
     override type I = I32
     override val Header: Byte = 0x41
-    override val codec: Codec[I32] =
+    override implicit val codec: Codec[I32] =
       headerCodec ~ wcodecs.vs32 xmap(
         x => I32(x._2),
         i => unapply(i) match {
@@ -575,7 +984,7 @@ object Const {
   object I64 extends Instruction.Companion {
     override type I = I64
     override val Header: Byte = 0x42
-    override val codec: Codec[I64] =
+    override implicit val codec: Codec[I64] =
       headerCodec ~ wcodecs.vs64 xmap(
         x => I64(x._2),
         i => unapply(i) match {
@@ -590,7 +999,7 @@ object Const {
   object F32 extends Instruction.Companion {
     override type I = F32
     override val Header: Byte = 0x43
-    override val codec: Codec[F32] =
+    override implicit val codec: Codec[F32] =
       headerCodec ~ wcodecs.vs32 xmap(
         x => F32(java.lang.Float.intBitsToFloat(x._2)),
         i => unapply(i) match {
@@ -605,7 +1014,7 @@ object Const {
   object F64 extends Instruction.Companion {
     override type I = F64
     override val Header: Byte = 0x44
-    override val codec: Codec[F64] =
+    override implicit val codec: Codec[F64] =
       headerCodec ~ wcodecs.vs64 xmap(
         x => F64(java.lang.Double.longBitsToDouble(x._2)),
         i => unapply(i) match {
@@ -724,7 +1133,7 @@ trait IntOps extends Ops {
       ShrS,
       ShrU,
       Rotl,
-      Rotr,
+      Rotr
     )
 
   def testOffset: Byte
@@ -779,7 +1188,7 @@ trait IntOps extends Ops {
       LeS,
       LeU,
       GeS,
-      GeU,
+      GeU
     )
 
   def convertOffset: Byte
@@ -818,7 +1227,7 @@ trait IntOps extends Ops {
       TruncUF32,
       TruncSF64,
       TruncUF64,
-      ReinterpretFloat,
+      ReinterpretFloat
     )
 }
 
@@ -856,7 +1265,7 @@ trait FloatOps extends Ops {
       Floor,
       Trunc,
       Nearest,
-      Sqrt,
+      Sqrt
     )
 
   def binaryOffset: Byte
@@ -891,7 +1300,7 @@ trait FloatOps extends Ops {
       Div,
       Min,
       Max,
-      CopySign,
+      CopySign
     )
 
   override val test: Set[Test] = Set()
@@ -925,7 +1334,7 @@ trait FloatOps extends Ops {
       Lt,
       Gt,
       Le,
-      Gt,
+      Gt
     )
 
   def convertOffset: Byte
@@ -960,7 +1369,7 @@ trait FloatOps extends Ops {
       ConvertUI64,
       PromoteF32,
       DemoteF64,
-      ReinterpretInt,
+      ReinterpretInt
     )
 }
 

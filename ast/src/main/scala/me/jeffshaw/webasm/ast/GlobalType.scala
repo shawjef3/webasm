@@ -21,7 +21,7 @@ object GlobalType {
           case GlobalType(t, Immutable) =>
             Sexpr.Codec[ValueType].encode(t)
           case GlobalType(t, Mutable) =>
-            Sexpr.Atom("mut") ++ Sexpr.Codec[ValueType].encode(t)
+            Sexpr.Cons(Sexpr.Atom("mut"), Sexpr.Codec[ValueType].encode(t))
         }
 
       override def decode(s: Sexpr): GlobalType = {

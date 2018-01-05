@@ -8,6 +8,8 @@ case class Instructions(instructions: Vector[Instruction])
 
 object Instructions {
 
+  val empty = Instructions(Vector.empty)
+
   val bodyEncoder: Encoder[Vector[Instruction]] =
     Encoder { instructions =>
       instructions.foldLeft(Attempt.successful(BitVector.empty)) {
@@ -58,6 +60,14 @@ object Instructions {
       _._1,
       i => (i, End)
     )
+
+  val thenNothing: Codec[Instructions] = {
+    implicit val unitCodec = scodec.codecs.provide(())
+    codec[Unit] xmap(
+      _._1,
+      i => (i, ())
+    )
+  }
 
   implicit val sCodec: Sexpr.Codec[Instructions] =
     new Sexpr.Codec[Instructions] {

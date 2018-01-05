@@ -179,6 +179,9 @@ case class UInt(private[unsigned] val i: Int) {
   override def toString: String =
     java.lang.Integer.toUnsignedString(i)
 
+  def toString(radix: Int): String =
+    java.lang.Integer.toUnsignedString(i, radix)
+
 }
 
 object UInt {

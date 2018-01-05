@@ -18,12 +18,12 @@ object Limits {
           } yield b ++ min ++ max
         },
       decoder = {
-                  for {
-                    b <- DecodingContext(wcodecs.bool)
-                    min <- DecodingContext(inner)
-                    max <- DecodingContext(codecs.optional(codecs.provide(b), inner))
-                  } yield Limits(min, max)
-                }.toDecoder
+        for {
+          b <- DecodingContext(wcodecs.bool)
+          min <- DecodingContext(inner)
+          max <- DecodingContext(codecs.optional(codecs.provide(b), inner))
+        } yield Limits(min, max)
+      }.toDecoder
     )
 
   implicit val intCodec: Codec[Limits[UInt]] =

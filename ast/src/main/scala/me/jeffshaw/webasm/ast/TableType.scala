@@ -12,6 +12,8 @@ object TableType {
   implicit val codec: Codec[TableType] =
     Codec[ElemType] ~ Codec[Limits[UInt]] xmap(
       (t: (ElemType, Limits[UInt])) => TableType(t._2, t._1),
-      t => (t.elemType, t.limits)
+      {
+        case TableType(limits, elemType) => (elemType, limits)
+      }
     )
 }

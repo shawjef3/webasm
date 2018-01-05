@@ -2,22 +2,31 @@ package me.jeffshaw.webasm.ast
 
 import scodec.{Attempt, Codec, Decoder, Encoder, Err}
 
-sealed trait ValueType {
+sealed trait ValueType extends Sexpr.Part {
   val Id: Byte
+  val size: Int
 }
 
 object ValueType {
   case object I32 extends ValueType {
     override val Id: Byte = 0x01
+    override val size: Int = 4
+    override val sExprPart: String = "i32"
   }
   case object I64 extends ValueType {
     override val Id: Byte = 0x02
+    override val size: Int = 4
+    override val sExprPart: String = "i64"
   }
   case object F32 extends ValueType {
     override val Id: Byte = 0x03
+    override val size: Int = 8
+    override val sExprPart: String = "f32"
   }
   case object F64 extends ValueType {
     override val Id: Byte = 0x04
+    override val size: Int = 8
+    override val sExprPart: String = "f64"
   }
 
   val values: Set[ValueType] =
@@ -53,7 +62,7 @@ object ValueType {
         I32 -> Sexpr.Atom("i32"),
         I64 -> Sexpr.Atom("i64"),
         F32 -> Sexpr.Atom("f32"),
-        F64 -> Sexpr.Atom("f64"),
+        F64 -> Sexpr.Atom("f64")
       )
     )
 

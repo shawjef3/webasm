@@ -185,6 +185,8 @@ case class ULong(private[unsigned] val i: Long) {
   override def toString: String =
     java.lang.Long.toUnsignedString(i)
 
+  def toString(radix: Int): String =
+    java.lang.Long.toUnsignedString(i, radix)
 }
 
 object ULong {
