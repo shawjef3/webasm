@@ -127,10 +127,10 @@ object Instruction {
     trait IsSexpr extends Singleton with Instruction.IsSexprFull {
       override implicit val sCodec: Sexpr.Codec.Partial[I] =
         new Sexpr.Codec.Partial[I] {
-          override val encoder: PartialFunction[IsSexpr.this.type, Sexpr] = {
+          override val encoder: PartialFunction[I, Sexpr] = {
             case _: I => AsAtom
           }
-          override val decoder: PartialFunction[Sexpr, IsSexpr.this.type] = {
+          override val decoder: PartialFunction[Sexpr, I] = {
             case Sexpr.Singleton(AsAtom) =>
               IsSexpr.this
           }
