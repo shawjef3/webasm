@@ -18,7 +18,7 @@ object Import {
     object Func {
       val id: Byte = 0
 
-      val codec: Codec[Kind] =
+      implicit val codec: Codec[Func] =
         codecs.constant(ByteVector(id)) ~ wcodecs.vu32 xmap (
           {
             case ((), item) => Func(item)
@@ -34,7 +34,7 @@ object Import {
     object Table {
       val id: Byte = 1
 
-      val codec: Codec[Kind] =
+      implicit val codec: Codec[Table] =
         codecs.constant(ByteVector(id)) ~ Codec[TableType] xmap(
           {
             case ((), tableType) => Table(tableType)
@@ -50,7 +50,7 @@ object Import {
     object Memory {
       val id: Byte = 2
 
-      val codec: Codec[Kind] =
+      implicit val codec: Codec[Memory] =
         codecs.constant(ByteVector(id)) ~ Codec[MemoryType] xmap(
           {
             case ((), memoryType) => Memory(memoryType)
@@ -66,7 +66,7 @@ object Import {
     object Global {
       val id: Byte = 3
 
-      val codec: Codec[Kind] =
+      implicit val codec: Codec[Global] =
         codecs.constant(ByteVector(id)) ~ Codec[GlobalType] xmap(
           {
             case ((), globalType) => Global(globalType)
@@ -77,8 +77,10 @@ object Import {
         )
     }
 
-    implicit val codec: Codec[Kind] =
-      codecs.choice(Func.codec, Table.codec, Memory.codec, Global.codec)
+    implicit val codec: Codec[Kind] = {
+      val cs = Seq(Func.codec, Table.codec, Memory.codec, Global.codec).map(_.asInstanceOf[Codec[Kind]])
+      codecs.choice(cs: _*)
+    }
 
   }
 
